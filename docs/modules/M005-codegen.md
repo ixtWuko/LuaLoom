@@ -52,6 +52,8 @@
   "luaCallCSharp": ["LuaLoom.Sample.Player", "LuaLoom.Sample.Config", "LuaLoom.Sample.PlayerExtensions"],
   "csharpCallLua": ["LuaLoom.Sample.ILuaUpdate", "System.Action<int>", "System.Func<int, string>"],
   "genericMethods": ["LuaLoom.Sample.Utils.Describe<int>"],
+  "reflectionUse": ["LuaLoom.Sample.Legacy"],
+  "gcOptimize": ["LuaLoom.Sample.Money"],
   "blackList": ["LuaLoom.Sample.Player.Secret"],
   "doNotGen": ["LuaLoom.Sample.Legacy"]
 }
@@ -98,6 +100,8 @@ lua-loom-gen generate --config lua-loom.json --coverage
 | `LuaCallCSharp` | `string[]` | 需要生成包装的类型全名 |
 | `CSharpCallLua` | `string[]` | 需要生成调用器的 delegate 与 interface |
 | `GenericMethods` | `string[]` | 需要生成闭合实例的泛型方法，格式 `Type.Method<T1,T2>` |
+| `ReflectionUse` | `string[]` | 只保留反射元数据、不生成绑定的类型（写入 `link.xml`） |
+| `GCOptimize` | `string[]` | 按 GC 优化 struct 处理；运行时自动识别 blittable，并写入 `link.xml` |
 | `BlackList` | `string[]` | 不生成、留给反射的 `Type` 或 `Type.Member` |
 | `DoNotGen` | `string[]` | 显式声明不生成的 `Type` 或 `Type.Member` |
 
@@ -121,7 +125,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 4. 对 delegate/interface 生成 invoker 或实现类；配置中的静态扩展类额外生成 `RegisterExtensionType` 与 `RegisterExtensions` 分派表；类型绑定包含非字符串键索引器、操作符与事件订阅 thunk。方法组按实参个数与 Lua 类型条件分派（字符串、布尔、整数、数值、userdata 等）；复杂重载组（`ref`/`out`/`params`/默认值混合）也用统一的动态 arity 分派，`out` 不消耗实参，`params` 吞掉剩余实参，缺省值按实参个数补齐；一维数组通过 `LuaBinding.ReadArray<T>` / `PushArray<T>` 编解码，矩形数组通过 `ReadObjectAs<T[,]>` / `PushArray(Array)` 递归成嵌套表。接口实现支持事件（转发 `add_<Event>`/`remove_<Event>`）和无约束泛型方法（方法名查表、`T` 走 `ConvertObject<T>`）；带约束的泛型接口方法与默认接口实现仍不生成。闭合泛型 delegate 的 `TypeRef` 递归输出 `global::Namespace.Type<...>`，文件名用 `TypeRef` 做字符白名单替换，避免写入尖括号、逗号与程序集限定名。
 5. 用 `CSharpSyntaxTree.ParseText` 做语法校验；真正的编译校验放在测试里，用 `CSharpCompilation` 对产物做一次 Emit。
 6. 通过后按文件名 `Ordinal` 排序写文件，UTF-8 无 BOM，换行 `\n`。
-7. 按配置类型生成 `link.xml`，避免 Unity IL2CPP 裁剪反射/生成所需元数据；XML 文件跳过 C# 语法校验。
+7. 按配置类型、`reflectionUse` 与 `gcOptimize` 生成 `link.xml`，避免 Unity IL2CPP 裁剪反射/生成所需元数据；XML 文件跳过 C# 语法校验。`gcOptimize` 只接受值类型，GC 优化本身由 `StructCodec` 按 blittable 自动判定。
 8. `check` 模式重新生成到内存，与磁盘文件逐字节比较，差异输出文件清单。
 9. 同时产出 `Coverage` 列表：每个配置成员标记 `generated` / `reflection` / `skipped`；`BlackList`/`DoNotGen` 命中的类型或成员记为 `skipped`，未生成原因随记录返回。命中接口任一成员时跳过整个接口实现，避免产出缺成员的实现类；命中 delegate 类型时跳过 invoker。
 10. `genericMethods` 按 `Type.Method<T1,T2>` 解析闭合实例，生成独立 binder，并在 `LuaBindings.Register` 中调用 `RegisterGenericMethod`。运行期 `lua_loom_generic` 先查这张表，命中后直接调用生成 handler；未配置的闭合实例仍走 `MakeGenericMethod` 反射，严格模式下会被拒绝。
@@ -155,8 +159,9 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 扩展方法类（列入 `luaCallCSharp`，生成注册与分派表） | 未配置的扩展方法不扫描、不可见 |
 | 一维/矩形数组参数/返回值（含类元素、字符串、枚举、`object`） | 交错数组的运行时特殊形状、非零下界数组 |
 | `decimal` 参数/返回值（struct userdata） | 反射路径的 decimal 自动识别 |
+| `gcOptimize` 声明的值类型（blittable 自动零 GC） | 非 blittable struct 仍走装箱/反射 |
 | 配置类型的 `Cast<T>`（`RegisterCast`） | 无无参构造的类、接口、集合/字典的生成式转换 |
-| `BlackList`/`DoNotGen` 类型或成员、`--coverage` 报告 | 按签名精确排除重载（当前按成员名排除整组） |
+| `BlackList`/`DoNotGen` 类型或成员、`ReflectionUse`、`--coverage` 报告 | 按签名精确排除重载（当前按成员名排除整组） |
 
 同一参数个数的多个重载取声明顺序第一个；多类型重载的精确解析留给运行时反射路径。生成器跳过的成员不会丢失，由 [M004](M004-interop-bridge.md) 的回落路径接管。
 
@@ -192,6 +197,8 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 生成绑定 + `StrictReflection = true` | 运行时执行生成成员 | 正常返回，无反射兜底 |
 | `blackList` 含 `Player.Add` | `generate` | `Add` 不在产物中，覆盖记录为 `blacklisted member` |
 | `doNotGen` 含整个类型 | `generate` | 不产出该类型 binder，覆盖记录为 `do-not-gen type` |
+| `reflectionUse` 含类型 | `generate` | 不产出 binder，`link.xml` 保留该类型 |
+| `gcOptimize` 含 struct | `generate` | `link.xml` 保留该 struct；运行时按 blittable 处理 |
 | `generate --coverage` | CLI | 输出 generated/reflection/skipped 统计与未生成原因 |
 | `genericMethods` 指定 `Generics.Describe<int>` | `generate` + 编译 + 运行 | 产物含 GenericBinder，`lua_loom_generic` 直接命中 |
 | 配置类型 + `table.Cast<T>()` | 运行 | 走 `RegisterCast` 生成的强类型转换 |

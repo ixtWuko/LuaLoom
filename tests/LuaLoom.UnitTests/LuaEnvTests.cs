@@ -219,4 +219,26 @@ public sealed class LuaEnvTests
 
         Assert.True(env.MemoryBytes > 0);
     }
+
+    [Fact]
+    public void GcParameters_CanBeReadAndWritten()
+    {
+        using var env = new LuaEnv();
+
+        var originalPause = env.GcPause;
+        var originalStep = env.GcStepMultiplier;
+        try
+        {
+            env.GcPause = 148;
+            env.GcStepMultiplier = 132;
+
+            Assert.Equal(148, env.GcPause);
+            Assert.Equal(132, env.GcStepMultiplier);
+        }
+        finally
+        {
+            env.GcPause = originalPause;
+            env.GcStepMultiplier = originalStep;
+        }
+    }
 }

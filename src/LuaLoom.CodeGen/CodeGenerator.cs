@@ -21,6 +21,12 @@ public sealed class GeneratorConfig
     /// <summary>需要生成闭合实例的泛型方法，格式为 `Type.Method&lt;T1,T2&gt;`。</summary>
     public string[] GenericMethods { get; set; } = [];
 
+    /// <summary>只保留反射元数据、不生成绑定的类型。</summary>
+    public string[] ReflectionUse { get; set; } = [];
+
+    /// <summary>需要按 GC 优化 struct 处理的类型；当前运行时自动识别 blittable。</summary>
+    public string[] GCOptimize { get; set; } = [];
+
     /// <summary>不生成绑定、改走反射的成员或类型（`Type` 或 `Type.Member`）。</summary>
     public string[] BlackList { get; set; } = [];
 
@@ -228,6 +234,36 @@ public static class CodeGenerator
             {
                 diagnostics.Add(new Diagnostic("LL0002", $"'{name}' is neither a delegate nor an interface."));
             }
+        }
+
+        foreach (var name in config.ReflectionUse.Distinct(StringComparer.Ordinal))
+        {
+            var type = ResolveConfiguredType(context, assembly, name);
+            if (type is null)
+            {
+                diagnostics.Add(new Diagnostic("LL0001", $"Type '{name}' not found in '{assemblyPath}'."));
+                continue;
+            }
+
+            referencedTypes.Add(type);
+        }
+
+        foreach (var name in config.GCOptimize.Distinct(StringComparer.Ordinal))
+        {
+            var type = ResolveConfiguredType(context, assembly, name);
+            if (type is null)
+            {
+                diagnostics.Add(new Diagnostic("LL0001", $"Type '{name}' not found in '{assemblyPath}'."));
+                continue;
+            }
+
+            if (!type.IsValueType)
+            {
+                diagnostics.Add(new Diagnostic("LL0002", $"GCOptimize type '{name}' must be a value type."));
+                continue;
+            }
+
+            referencedTypes.Add(type);
         }
 
         foreach (var specification in config.GenericMethods.Distinct(StringComparer.Ordinal)

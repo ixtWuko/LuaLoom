@@ -748,6 +748,17 @@ internal static class Interop
             return 1;
         }
 
+        if (left is Delegate leftDelegate
+            && right is Delegate rightDelegate
+            && methodName is "op_Addition" or "op_Subtraction")
+        {
+            var combined = methodName == "op_Addition"
+                ? Delegate.Combine(leftDelegate, rightDelegate)
+                : Delegate.Remove(leftDelegate, rightDelegate);
+            environment.Marshal.PushObject(combined);
+            return 1;
+        }
+
         if (environment.TryGetTypeBinding(left.GetType(), out var operatorBinding)
             && operatorBinding.Operators is { } operators
             && operators.TryGetValue(methodName, out var generated))

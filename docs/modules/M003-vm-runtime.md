@@ -52,6 +52,8 @@ public sealed partial class LuaEnv : IDisposable
     public LuaTable Global { get; }
     internal IntPtr Handle { get; }
     public long MemoryBytes { get; }
+    public int GcPause { get; set; }
+    public int GcStepMultiplier { get; set; }
     public void AddLoader(ScriptLoader loader);
     public object[] DoString(string chunk, string chunkName = "chunk", LuaTable? env = null);
     public LuaFunction LoadString(string chunk, string chunkName = "chunk", LuaTable? env = null);
@@ -164,6 +166,7 @@ update(0.016);
 **GC 与清理**
 
 - `CollectGarbage(GcMode)` 映射到 `lua_gc`，`GcMode` 取 `Collect`、`Stop`、`Restart`、`Step`、`Count`。
+- `GcPause` / `GcStepMultiplier` 映射 `LUA_GCSETPAUSE` / `LUA_GCSETSTEPMUL`，读写返回当前值；Lua 5.4 内部按 4 对齐，设置值可能被取整。
 - `MemoryBytes` 取 `lua_gc(LUA_GCCOUNT)` 与 `LUA_GCCOUNTB` 合成字节数。
 - `Tick()` 调用 `_marshal.DrainDeferredReleases()` 消费终结器入队的 id，并执行一次 `lua_gc(LUA_GCSTEP)`。
 - `Dispose()`：置位标记 → 清空 loader → `lua_close` → 释放原生库句柄（引用计数归零时）。

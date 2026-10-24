@@ -184,6 +184,27 @@ public sealed class CodeGenTests
     }
 
     [Fact]
+    public void Generate_ReflectionUseOnlyPreservesMetadata()
+    {
+        var config = CreateConfig(typeof(Player).Assembly.Location);
+        config.LuaCallCSharp = [];
+        config.CSharpCallLua = [];
+        config.GenericMethods = [];
+        config.ReflectionUse = ["LuaLoom.UnitTests.Sample.UnsupportedSurface"];
+        config.GCOptimize = ["LuaLoom.UnitTests.Sample.Vec2"];
+
+        var result = CodeGenerator.Generate(config, AppContext.BaseDirectory);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.DoesNotContain(
+            result.Files,
+            static f => f.FileName == "LuaLoom_UnitTests_Sample_UnsupportedSurfaceBinder.g.cs");
+        var link = result.Files.Single(static f => f.FileName == "link.xml");
+        Assert.Contains("LuaLoom.UnitTests.Sample.UnsupportedSurface", link.Content, StringComparison.Ordinal);
+        Assert.Contains("LuaLoom.UnitTests.Sample.Vec2", link.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Generate_BlackListAndDoNotGenSkipMembers()
     {
         var config = CreateConfig(typeof(Player).Assembly.Location);
@@ -363,6 +384,10 @@ public sealed class CodeGenTests
                 'LuaLoom.UnitTests.Sample.Generics', 'Describe', 'System.Int32')
             local matrix = { { 1, 2 }, { 3, 4 } }
             local madeMatrix = CS.LuaLoom.UnitTests.Sample.ArrayMethods.MakeMatrix(2)
+            local f2 = CS.LuaLoom.UnitTests.Sample.DelegateFactory.Make(2)
+            local f3 = CS.LuaLoom.UnitTests.Sample.DelegateFactory.Make(3)
+            local combined = f2 + f3
+            local removed = combined - f3
             return p.Hp, p.Name, p:Add(2, 3), p:Add(5),
                    CS.LuaLoom.UnitTests.Sample.Player.Double(6),
                    c:Combo(1), c:Combo(1, 2), c:Combo(1, 'x'),
@@ -371,7 +396,7 @@ public sealed class CodeGenTests
                    CS.LuaLoom.UnitTests.Sample.ArrayMethods.SumPlayers(players),
                    #made, made[2].Hp, describe(5),
                    CS.LuaLoom.UnitTests.Sample.ArrayMethods.SumMatrix(matrix),
-                   madeMatrix[2][2]
+                   madeMatrix[2][2], combined(4), removed(4)
             """);
 
         Assert.Equal(4L, results[0]);
@@ -394,6 +419,8 @@ public sealed class CodeGenTests
         Assert.Equal("Int32:5", results[17]);
         Assert.Equal(10L, results[18]);
         Assert.Equal(5L, results[19]);
+        Assert.Equal(12L, results[20]);
+        Assert.Equal(8L, results[21]);
 
         using var castTable = (LuaTable)env.DoString("return { Hp = 8, Name = 'cast' }")[0]!;
         var castPlayer = castTable.Cast<Player>();
