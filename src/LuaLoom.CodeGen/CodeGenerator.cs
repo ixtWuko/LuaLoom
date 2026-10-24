@@ -123,29 +123,43 @@ public static class CodeGenerator
 
         foreach (var name in config.CSharpCallLua.Distinct(StringComparer.Ordinal).OrderBy(static n => n, StringComparer.Ordinal))
         {
-            var type = assembly.GetType(name);
+            var type = ResolveConfiguredType(context, assembly, name);
             if (type is null)
             {
-                diagnostics.Add(new Diagnostic("LL0001", $"Type '{name}' not found in '{assemblyPath}'."));
+                if (name.Contains("<>", StringComparison.Ordinal))
+                {
+                    diagnostics.Add(new Diagnostic("LL0003", $"Open generic type '{name}' is not supported."));
+                }
+                else
+                {
+                    diagnostics.Add(new Diagnostic("LL0001", $"Type '{name}' not found in '{assemblyPath}'."));
+                }
+
                 continue;
             }
 
-            if (type.IsGenericType || type.IsGenericTypeDefinition)
+            if (type.IsGenericTypeDefinition)
             {
                 diagnostics.Add(new Diagnostic("LL0003", $"Open generic type '{name}' is not supported."));
                 continue;
             }
 
+            if (type.IsGenericType && !IsDelegateType(type) && !type.IsInterface)
+            {
+                diagnostics.Add(new Diagnostic("LL0003", $"Generic type '{name}' is only supported for delegates and interfaces."));
+                continue;
+            }
+
             if (IsDelegateType(type))
             {
-                var invoker = Sanitize(type.FullName!) + "Invoker";
+                var invoker = FileStem(type) + "Invoker";
                 files.Add(new GeneratedFile(invoker + ".g.cs", EmitDelegateInvoker(type, invoker, config)));
                 registrations.Add(
                     $"        env.RegisterDelegate(typeof({TypeRef(type)}), new global::{config.Namespace}.{invoker}());");
             }
             else if (type.IsInterface)
             {
-                var implementation = Sanitize(type.FullName!) + "Impl";
+                var implementation = FileStem(type) + "Impl";
                 files.Add(new GeneratedFile(implementation + ".g.cs", EmitInterfaceImplementation(type, implementation, config)));
                 registrations.Add(
                     $"        env.RegisterInterface(typeof({TypeRef(type)}), static t => new global::{config.Namespace}.{implementation}(t));");
@@ -172,6 +186,167 @@ public static class CodeGenerator
             .ToList();
         files.Sort(static (a, b) => string.CompareOrdinal(a.FileName, b.FileName));
         return new GenerationResult(files, diagnostics);
+    }
+
+    private static Type? ResolveConfiguredType(
+        MetadataLoadContext context,
+        Assembly assembly,
+        string name)
+    {
+        name = name.Trim();
+        var simple = ResolveSimpleType(context, assembly, name);
+        if (simple is not null)
+        {
+            return simple;
+        }
+
+        var open = name.IndexOf('<');
+        if (open < 0 || !name.EndsWith('>'))
+        {
+            return null;
+        }
+
+        var definitionName = name[..open].Trim();
+        var arguments = SplitGenericArguments(name[(open + 1)..^1]);
+        if (arguments.Count == 0)
+        {
+            return null;
+        }
+
+        var definition = ResolveSimpleType(context, assembly, definitionName + "`" + arguments.Count);
+        if (definition is null || !definition.IsGenericTypeDefinition)
+        {
+            return null;
+        }
+
+        var resolved = new Type[arguments.Count];
+        for (var i = 0; i < arguments.Count; i++)
+        {
+            var argument = ResolveConfiguredType(context, assembly, arguments[i]);
+            if (argument is null)
+            {
+                return null;
+            }
+
+            resolved[i] = argument;
+        }
+
+        try
+        {
+            return definition.MakeGenericType(resolved);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static Type? ResolveSimpleType(
+        MetadataLoadContext context,
+        Assembly assembly,
+        string name)
+    {
+        if (name.IndexOfAny(['<', '>']) >= 0)
+        {
+            return null;
+        }
+
+        var alias = TypeAlias(name);
+        if (alias is not null)
+        {
+            name = alias;
+        }
+
+        var type = TryGetType(assembly, name);
+        if (type is not null)
+        {
+            return type;
+        }
+
+        type = context.CoreAssembly is null ? null : TryGetType(context.CoreAssembly, name);
+        if (type is not null)
+        {
+            return type;
+        }
+
+        foreach (var candidate in context.GetAssemblies())
+        {
+            type = TryGetType(candidate, name);
+            if (type is not null)
+            {
+                return type;
+            }
+        }
+
+        return null;
+    }
+
+    private static Type? TryGetType(Assembly assembly, string name)
+    {
+        try
+        {
+            return assembly.GetType(name);
+        }
+        catch (Exception exception) when (
+            exception is System.IO.FileNotFoundException
+                or ArgumentException
+                or TypeLoadException
+                or BadImageFormatException)
+        {
+            return null;
+        }
+    }
+
+    private static string? TypeAlias(string name) => name switch
+    {
+        "bool" => "System.Boolean",
+        "byte" => "System.Byte",
+        "sbyte" => "System.SByte",
+        "short" => "System.Int16",
+        "ushort" => "System.UInt16",
+        "int" => "System.Int32",
+        "uint" => "System.UInt32",
+        "long" => "System.Int64",
+        "ulong" => "System.UInt64",
+        "float" => "System.Single",
+        "double" => "System.Double",
+        "decimal" => "System.Decimal",
+        "char" => "System.Char",
+        "string" => "System.String",
+        "object" => "System.Object",
+        _ => null,
+    };
+
+    private static List<string> SplitGenericArguments(string text)
+    {
+        var arguments = new List<string>();
+        var depth = 0;
+        var start = 0;
+
+        for (var i = 0; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '<':
+                    depth++;
+                    break;
+                case '>':
+                    depth--;
+                    break;
+                case ',' when depth == 0:
+                    arguments.Add(text[start..i].Trim());
+                    start = i + 1;
+                    break;
+            }
+        }
+
+        var last = text[start..].Trim();
+        if (last.Length > 0)
+        {
+            arguments.Add(last);
+        }
+
+        return arguments;
     }
 
     private static MetadataLoadContext CreateContext(string assemblyPath)
@@ -287,7 +462,6 @@ public static class CodeGenerator
         }
 
         builder.AppendLine("            default:");
-        builder.AppendLine($"                global::LuaLoom.LuaBinding.Throw(L, \"No matching constructor for '{type.Name}'.\");");
         builder.AppendLine("                return 0;");
         builder.AppendLine("        }");
         builder.AppendLine("    }");
@@ -335,8 +509,7 @@ public static class CodeGenerator
         }
 
         builder.AppendLine("            default:");
-        builder.AppendLine("                global::LuaLoom.LuaBinding.PushNil(L);");
-        builder.AppendLine("                return 1;");
+        builder.AppendLine("                return 0;");
         builder.AppendLine("        }");
         builder.AppendLine("    }");
 
@@ -371,8 +544,8 @@ public static class CodeGenerator
         }
 
         builder.AppendLine("            default:");
-        builder.AppendLine($"                global::LuaLoom.LuaBinding.Throw(L, \"Cannot set static member on '{type.Name}'.\");");
-        builder.AppendLine("                return 0;");
+        builder.AppendLine("                global::LuaLoom.LuaBinding.PushNil(L);");
+        builder.AppendLine("                return 1;");
         builder.AppendLine("        }");
         builder.AppendLine("    }");
     }
@@ -420,8 +593,7 @@ public static class CodeGenerator
         }
 
         builder.AppendLine("            default:");
-        builder.AppendLine("                global::LuaLoom.LuaBinding.PushNil(L);");
-        builder.AppendLine("                return 1;");
+        builder.AppendLine("                return 0;");
         builder.AppendLine("        }");
         builder.AppendLine("    }");
 
@@ -455,8 +627,8 @@ public static class CodeGenerator
         }
 
         builder.AppendLine("            default:");
-        builder.AppendLine($"                global::LuaLoom.LuaBinding.Throw(L, \"Cannot set member on '{type.Name}'.\");");
-        builder.AppendLine("                return 0;");
+        builder.AppendLine("                global::LuaLoom.LuaBinding.PushNil(L);");
+        builder.AppendLine("                return 1;");
         builder.AppendLine("        }");
         builder.AppendLine("    }");
     }
@@ -767,7 +939,35 @@ public static class CodeGenerator
             return "string";
         }
 
+        if (type.IsGenericType && !type.IsGenericTypeDefinition)
+        {
+            var definition = type.GetGenericTypeDefinition();
+            var name = StripArity(definition.FullName ?? definition.Name).Replace('+', '.');
+            var arguments = string.Join(", ", type.GetGenericArguments().Select(TypeRef));
+            return $"global::{name}<{arguments}>";
+        }
+
         return "global::" + (type.FullName ?? type.Name).Replace('+', '.');
+    }
+
+    private static string StripArity(string name)
+    {
+        var builder = new StringBuilder(name.Length);
+        for (var i = 0; i < name.Length; i++)
+        {
+            if (name[i] != '`')
+            {
+                builder.Append(name[i]);
+                continue;
+            }
+
+            while (i + 1 < name.Length && char.IsDigit(name[i + 1]))
+            {
+                i++;
+            }
+        }
+
+        return builder.ToString();
     }
 
     private static string ReadExpression(Type type, int index)
@@ -890,7 +1090,21 @@ public static class CodeGenerator
         return $"({TypeRef(type)}){call}[0]!";
     }
 
-    private static string Sanitize(string name) => name.Replace('.', '_').Replace('+', '_').Replace('`', '_');
+    private static string FileStem(Type type) => Sanitize(
+        type.IsGenericType
+            ? TypeRef(type).Replace("global::", string.Empty, StringComparison.Ordinal)
+            : type.FullName ?? type.Name);
+
+    private static string Sanitize(string name)
+    {
+        var builder = new StringBuilder(name.Length);
+        foreach (var character in name)
+        {
+            builder.Append(char.IsLetterOrDigit(character) ? character : '_');
+        }
+
+        return builder.ToString();
+    }
 
     private static bool Is(Type type, Type runtime) => type.FullName == runtime.FullName;
 

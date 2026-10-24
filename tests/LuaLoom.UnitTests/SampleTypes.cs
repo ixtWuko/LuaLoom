@@ -20,6 +20,8 @@ public class Player
 
     public int Add(int value) => Hp + value;
 
+    public string Join(string separator, params object[] items) => string.Join(separator, items);
+
     public static int Double(int value) => value * 2;
 }
 
@@ -51,6 +53,8 @@ public sealed class Calculator : ICalculator
 }
 
 public delegate int IntOp(int a, int b);
+
+public delegate TResult Mapper<in T, out TResult>(T value);
 
 public static class Thrower
 {
@@ -116,4 +120,43 @@ public sealed class GenericBox
 public class Box<T>
 {
     public T? Value { get; set; }
+}
+
+public static class Parsing
+{
+    public static bool TryParse(string text, out int value) => int.TryParse(text, out value);
+
+    public static void Bump(ref int value) => value++;
+
+    public static int AddAndBump(int value, ref int extra)
+    {
+        extra += value;
+        return value * 2;
+    }
+
+    public static string Join(string separator, params object[] items) => string.Join(separator, items);
+
+    public static int Sum(params int[] values)
+    {
+        var total = 0;
+        foreach (var value in values)
+        {
+            total += value;
+        }
+
+        return total;
+    }
+}
+
+public sealed class NumberList
+{
+    public NumberList(params int[] values)
+    {
+        foreach (var value in values)
+        {
+            Total += value;
+        }
+    }
+
+    public int Total;
 }

@@ -34,7 +34,6 @@ internal static class LuaLoom_Sample_PlayerBinder
                 return 1;
             }
             default:
-                global::LuaLoom.LuaBinding.Throw(L, "No matching constructor for 'Player'.");
                 return 0;
         }
     }
@@ -74,8 +73,7 @@ internal static class LuaLoom_Sample_PlayerBinder
                 global::LuaLoom.LuaBinding.PushFunction(L, Static_Double);
                 return 1;
             default:
-                global::LuaLoom.LuaBinding.PushNil(L);
-                return 1;
+                return 0;
         }
     }
 
@@ -88,8 +86,8 @@ internal static class LuaLoom_Sample_PlayerBinder
                 global::LuaLoom.Sample.Player.Count = global::LuaLoom.LuaBinding.ReadInt(L, 3);
                 return 0;
             default:
-                global::LuaLoom.LuaBinding.Throw(L, "Cannot set static member on 'Player'.");
-                return 0;
+                global::LuaLoom.LuaBinding.PushNil(L);
+                return 1;
         }
     }
 
@@ -146,8 +144,7 @@ internal static class LuaLoom_Sample_PlayerBinder
                 global::LuaLoom.LuaBinding.PushFunction(L, Instance_Add);
                 return 1;
             default:
-                global::LuaLoom.LuaBinding.PushNil(L);
-                return 1;
+                return 0;
         }
     }
 
@@ -164,8 +161,8 @@ internal static class LuaLoom_Sample_PlayerBinder
                 self.Hp = global::LuaLoom.LuaBinding.ReadInt(L, 3);
                 return 0;
             default:
-                global::LuaLoom.LuaBinding.Throw(L, "Cannot set member on 'Player'.");
-                return 0;
+                global::LuaLoom.LuaBinding.PushNil(L);
+                return 1;
         }
     }
 }

@@ -179,7 +179,7 @@ pwsh scripts/ci.ps1 -Version 53  # Lua 5.3
 - 平台：Windows x64 本地验证，Linux x64 与 macOS arm64 由 CI 验证；Windows arm64、Linux arm64、iOS/Android/WebGL 未覆盖。不含 LuaJIT。
 - Lua 版本在构建时二选一（5.3.6 / 5.4.9），同一进程不能混用两个版本；5.5 仅预留画像。
 - 虚拟机与句柄是单线程的，跨线程调用抛异常。
-- 生成器覆盖 public 构造、字段、属性、方法、非泛型 delegate 与接口；泛型、`ref`/`out`/`params`、事件、操作符、索引器不在生成范围内。这些能力可通过反射路径或 `lua_loom_generic` 使用。
+- 生成器覆盖 public 构造、字段、属性、方法、非泛型与闭合泛型 delegate（如 `Action<int>`）以及接口；泛型类型、泛型方法、事件、操作符、索引器的生成不在范围内。`ref`/`out`/`params` 与上述未生成成员由反射路径处理，绑定未命中的键会自动回落，不会变成 `nil`。
 - 未生成 delegate 时，`Get<TDelegate>` 会抛异常；接口有 `DispatchProxy` 兜底，事件委托由表达式树现场生成。
 - 不含热补丁、Unity 适配与资源版本管理。
 
@@ -188,7 +188,7 @@ pwsh scripts/ci.ps1 -Version 53  # Lua 5.3
 - [使用说明](docs/usage.md)
 - [总体设计](docs/overall.md)
 - 模块文档：`docs/modules/M001`–`M006`
-- 功能文档：`docs/features/`
+- 后续需求：`docs/features/`（已交付条目已并入模块文档）
 
 ## 相关项目
 

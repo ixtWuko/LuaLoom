@@ -9,6 +9,7 @@
 - 开发者写好 C# 类型与 `lua-loom.json`，执行 `lua-loom-gen generate` 产出 `.g.cs`。
 - CI 执行 `lua-loom-gen check`，确认仓库里的生成物与重新生成的结果一致。
 - 运行期启动时，消费方调用 `LuaBindings.Register(env)`，把生成的类型绑定与 invoker 注册进当前环境。
+- `csharpCallLua` 可以直接写闭合泛型 delegate（`System.Action<int>`、`System.Func<int, string>`、自定义 `Mapper<int, string>`），生成对应 invoker。
 
 **边界**
 
@@ -26,6 +27,9 @@
 | E4 | 配置中类型不存在时输出诊断 `LL0001` 并退出码 `2` | 构造错误配置 |
 | E5 | 生成的注册代码只注册配置中列出的类型 | 运行期检查缓存条目数 |
 | E6 | 生成产物通过 Roslyn 语法校验，并在测试里用 `CSharpCompilation` 编译通过 | 生成非法类型名触发；编译测试断言 Emit 成功 |
+| E7 | 闭合泛型 delegate 可解析并生成，类型名与 `typeof` 使用完整泛型形式 | 配置 `Action<int>`、`Func<int,string>`、自定义 `Mapper<int,string>` 后编译通过 |
+| E8 | 开放泛型（``Action`1``、`Action<>`）输出 `LL0003` | 构造两类错误配置 |
+| E9 | 泛型产物的文件名稳定、只含字母数字与下划线 | 文件名不出现 `<`、`,`、`[`、程序集版本 |
 
 **非目标**
 
@@ -44,8 +48,8 @@
   "assembly": "artifacts/bin/LuaLoom.Sample/release/LuaLoom.Sample.dll",
   "output": "samples/LuaLoom.Sample/Generated",
   "namespace": "LuaLoom.Sample.Generated",
-  "luaCallCSharp": ["LuaLoom.Sample.Player", "System.Collections.Generic.List<int>"],
-  "csharpCallLua": ["LuaLoom.Sample.ILuaUpdate", "System.Action<int>"]
+  "luaCallCSharp": ["LuaLoom.Sample.Player", "LuaLoom.Sample.Config"],
+  "csharpCallLua": ["LuaLoom.Sample.ILuaUpdate", "System.Action<int>", "System.Func<int, string>"]
 }
 ```
 
@@ -101,11 +105,12 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 **算法**
 
 1. 读取配置，校验字段完整性；相对路径以配置文件所在目录为基准解析。
-2. `MetadataLoadContext` 加载目标程序集及其依赖，解析每个类型全名；缺失则记 `LL0001`。
-3. 遍历类型成员，过滤 `obsolete` 与非公共成员；遇到不支持的类型记 `LL0002`。
-4. 用 `SyntaxFactory` 构建语法树，`CSharpSyntaxTree` 做语法校验；真正的编译校验放在测试里，用 `CSharpCompilation` 对产物做一次 Emit。
-5. 通过后按固定顺序（类型全名 `Ordinal` 排序）写文件，UTF-8 无 BOM，换行 `\n`。
-6. `check` 模式重新生成到内存，与磁盘文件逐字节比较，差异输出文件清单。
+2. `MetadataLoadContext` 加载目标程序集及其依赖，解析每个类型全名；缺失则记 `LL0001`。`csharpCallLua` 支持 `Name<Arg1, Arg2>`：先查目标程序集、核心程序集与已加载程序集，再递归解析泛型参数并 `MakeGenericType`；基本类型别名映射到 CLR 类型。
+3. 遍历类型成员：跳过非公共成员与生成器不支持的类型（`ref`/`out`、数组、泛型类型等）；被跳过的成员由 M004 的反射回落接管，不记错误。
+4. 对 delegate/interface 生成 invoker 或实现类；闭合泛型 delegate 的 `TypeRef` 递归输出 `global::Namespace.Type<...>`，文件名用 `TypeRef` 做字符白名单替换，避免写入尖括号、逗号与程序集限定名。
+5. 用 `CSharpSyntaxTree.ParseText` 做语法校验；真正的编译校验放在测试里，用 `CSharpCompilation` 对产物做一次 Emit。
+6. 通过后按文件名 `Ordinal` 排序写文件，UTF-8 无 BOM，换行 `\n`。
+7. `check` 模式重新生成到内存，与磁盘文件逐字节比较，差异输出文件清单。
 
 **复杂度**：O(类型数 × 成员数)；生成 100 个类型的耗时上限在模块验收中定为 5 秒以内（本机）。
 
@@ -115,7 +120,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 - 注册是显式的：消费方创建 `LuaEnv` 后调用 `LuaBindings.Register(env)`，把类型、delegate、interface 三类绑定注册进环境，不使用 `ModuleInitializer`，避免全局静态注册表。
 - 产物是普通 `.cs` 文件，放回项目目录即被 SDK 默认通配包含，不需要手写 `<Compile Include>`。
 - 生成器依赖 `Microsoft.CodeAnalysis.CSharp`，只作为 CLI 的构建期依赖，不随运行时库发布。
-- 诊断码固定：`LL0001` 类型不存在、`LL0002` 成员类型不支持、`LL0003` 开放泛型、`LL0004` 配置重复、`LL0006` 产物语法错误。
+- 诊断码固定：`LL0001` 类型不存在、`LL0002` 成员类型不支持、`LL0003` 开放或不受支持的泛型、`LL0004` 配置重复、`LL0006` 产物语法错误。
 - 生成失败时不写任何文件，避免留下半成品。
 
 **当前支持范围**
@@ -123,13 +128,13 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 支持 | 不支持 |
 | :-- | :-- |
 | public 构造函数（按参数个数分派） | 泛型类型、泛型方法、嵌套类型 |
-| 实例/静态字段与属性（可读可写） | `ref`/`out`/`params` 参数 |
-| 实例/静态方法（按参数个数选择重载） | 事件、操作符、索引器 |
-| 非泛型 delegate | 泛型 delegate（如 `Action<T>`） |
-| interface 的方法与属性 | 数组参数（`T[]`） |
-| — | 接口默认实现、显式接口实现 |
+| 实例/静态字段与属性（可读可写） | 事件、操作符、索引器的生成（运行期仍走反射） |
+| 实例/静态方法（按参数个数选择重载） | `ref`/`out`/`params` 的生成（运行期回落反射） |
+| 非泛型 delegate 与闭合泛型 delegate（如 `Action<int>`） | 开放泛型 delegate |
+| interface 的方法与属性（含闭合泛型接口） | 接口默认实现、显式接口实现 |
+| — | 数组参数（`T[]`）的生成 |
 
-同一参数个数的多个重载取声明顺序第一个；多类型重载的精确解析留给运行时反射路径。
+同一参数个数的多个重载取声明顺序第一个；多类型重载的精确解析留给运行时反射路径。生成器跳过的成员不会丢失，由 [M004](M004-interop-bridge.md) 的回落路径接管。
 
 **资源**：无外部资源；模板以 `StringBuilder` 拼接，不引入模板引擎。
 
@@ -142,6 +147,11 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 修改磁盘上的生成文件 | `check` | 退出码 `1`，列出该文件 |
 | 配置里写不存在的类型 | `generate` | 诊断 `LL0001`，退出码 `2`，无文件写入 |
 | 配置含开放泛型 `List<>` | `generate` | 诊断 `LL0003`，退出码 `2` |
+| `csharpCallLua` 含 `System.Action<int>` | `generate` + 编译 | 产物含 `new global::System.Action<int>`，Emit 成功 |
+| `csharpCallLua` 含 `System.Func<int, string>` | `generate` + 编译 | 多参数泛型解析正确，Emit 成功 |
+| `csharpCallLua` 含自定义 `Mapper<int, string>` | `generate` + 编译 | 目标程序集开放泛型闭合正确 |
+| 配置 ``System.Action`1`` 或 `System.Action<>` | `generate` | 诊断 `LL0003` |
+| 检查泛型产物文件名 | 文本检查 | 仅字母数字与下划线 |
 | 同一类型在 `luaCallCSharp` 出现两次 | `generate` | 诊断 `LL0004`，退出码 `2` |
 | 输出目录只读 | `generate` | 抛 `IOException`，已有文件不被破坏 |
 | 生成物被手改 | `check` | 退出码 `1` |

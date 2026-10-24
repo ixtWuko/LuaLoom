@@ -152,21 +152,16 @@ internal static class Interop
     {
         var fullName = ReadString(s, 1);
         var environment = GetEnvironment(s);
+        var hasBinding = environment.TryGetTypeBinding(fullName, out var binding);
 
-        if (environment.TryGetTypeBinding(fullName, out var binding))
-        {
-            CreateClassTable(s, fullName, binding);
-            return 1;
-        }
-
-        var type = ResolveType(fullName);
+        var type = hasBinding ? binding.Type : ResolveType(fullName);
         if (type is null)
         {
             LuaApi.lua_pushnil(s);
             return 1;
         }
 
-        if (!environment.Options.EnableReflectionFallback)
+        if (!hasBinding && !environment.Options.EnableReflectionFallback)
         {
             throw new InvalidOperationException(
                 $"Type '{fullName}' is not registered. Add it to luaCallCSharp or enable EnableReflectionFallback.");
@@ -179,22 +174,51 @@ internal static class Interop
     private static int OnConstruct(IntPtr state) => Guarded(state, static s =>
     {
         var environment = GetEnvironment(s);
-        var type = ResolveType(GetUpvalueString(s, 1))
-            ?? throw new InvalidOperationException("Type not found.");
+        var fullName = GetUpvalueString(s, 1);
+        var hasBinding = environment.TryGetTypeBinding(fullName, out var binding);
+        if (hasBinding && binding.Call is not null)
+        {
+            var top = LuaApi.lua_gettop(s);
+            var results = binding.Call(s);
+            if (results > 0 || LuaApi.lua_gettop(s) > top)
+            {
+                return results;
+            }
+        }
 
-        var args = ReadArguments(environment, s, 2, LuaApi.lua_gettop(s));
-        var constructor = SelectConstructor(type, args)
-            ?? throw new MissingMethodException($"No matching constructor for '{type.Name}' with {args.Length} argument(s).");
+        var type = hasBinding ? binding.Type : ResolveType(fullName);
+        if (type is null)
+        {
+            throw new InvalidOperationException("Type not found.");
+        }
+
+        var values = ReadArguments(environment, s, 2, LuaApi.lua_gettop(s));
+        if (!TrySelectConstructor(type, values, out var constructor, out var args))
+        {
+            throw new MissingMethodException(
+                $"No matching constructor for '{type.Name}' with {values.Length} argument(s).");
+        }
 
         var instance = constructor.Invoke(args);
         environment.Marshal.PushObject(instance);
-        return 1;
+        return 1 + PushByRefResults(environment, constructor.GetParameters(), args);
     });
 
     private static int OnStaticIndex(IntPtr state) => Guarded(state, static s =>
     {
         var environment = GetEnvironment(s);
         var fullName = GetUpvalueString(s, 1);
+
+        if (environment.TryGetTypeBinding(fullName, out var binding) && binding.StaticIndex is not null)
+        {
+            var top = LuaApi.lua_gettop(s);
+            var results = binding.StaticIndex(s);
+            if (results > 0 || LuaApi.lua_gettop(s) > top)
+            {
+                return results;
+            }
+        }
+
         var type = ResolveType(fullName) ?? throw new InvalidOperationException("Type not found.");
         var name = ReadString(s, 2);
 
@@ -229,7 +253,21 @@ internal static class Interop
     private static int OnStaticSet(IntPtr state) => Guarded(state, static s =>
     {
         var environment = GetEnvironment(s);
-        var type = ResolveType(GetUpvalueString(s, 1)) ?? throw new InvalidOperationException("Type not found.");
+        var fullName = GetUpvalueString(s, 1);
+
+        if (environment.TryGetTypeBinding(fullName, out var binding) && binding.StaticNewIndex is not null)
+        {
+            var top = LuaApi.lua_gettop(s);
+            var results = binding.StaticNewIndex(s);
+            if (results == 0)
+            {
+                return 0;
+            }
+
+            LuaApi.lua_settop(s, top);
+        }
+
+        var type = ResolveType(fullName) ?? throw new InvalidOperationException("Type not found.");
         var name = ReadString(s, 2);
         var value = environment.Marshal.ReadObject(3);
 
@@ -260,7 +298,12 @@ internal static class Interop
 
         if (environment.TryGetTypeBinding(instance.GetType(), out var binding) && binding.InstanceIndex is not null)
         {
-            return binding.InstanceIndex(s);
+            var top = LuaApi.lua_gettop(s);
+            var results = binding.InstanceIndex(s);
+            if (results > 0 || LuaApi.lua_gettop(s) > top)
+            {
+                return results;
+            }
         }
 
         var name = ReadString(s, 2);
@@ -314,7 +357,14 @@ internal static class Interop
 
         if (environment.TryGetTypeBinding(instance.GetType(), out var binding) && binding.InstanceNewIndex is not null)
         {
-            return binding.InstanceNewIndex(s);
+            var top = LuaApi.lua_gettop(s);
+            var results = binding.InstanceNewIndex(s);
+            if (results == 0)
+            {
+                return 0;
+            }
+
+            LuaApi.lua_settop(s, top);
         }
 
         var name = ReadString(s, 2);
@@ -340,13 +390,15 @@ internal static class Interop
         var environment = GetEnvironment(s);
         var type = ResolveType(GetUpvalueString(s, 1)) ?? throw new InvalidOperationException("Type not found.");
         var name = GetUpvalueString(s, 2);
-        var args = ReadArguments(environment, s, 1, LuaApi.lua_gettop(s));
+        var values = ReadArguments(environment, s, 1, LuaApi.lua_gettop(s));
 
-        var method = SelectMethod(type, name, args, isStatic: true)
-            ?? throw new MissingMethodException($"No matching static method '{type.Name}.{name}'.");
+        if (!TrySelectMethod(type, name, values, isStatic: true, out var method, out var args))
+        {
+            throw new MissingMethodException($"No matching static method '{type.Name}.{name}'.");
+        }
 
         var result = Invoke(method, null, args);
-        return PushResult(environment, method.ReturnType, result);
+        return PushReturnAndByRefResults(environment, method, result, args);
     });
 
     private static int OnInstanceMethod(IntPtr state) => Guarded(state, static s =>
@@ -355,13 +407,15 @@ internal static class Interop
         var instance = environment.Marshal.GetObjectFromUserdata(1)
             ?? throw new InvalidOperationException("Lua value is not a C# object.");
         var name = GetUpvalueString(s, 1);
-        var args = ReadArguments(environment, s, 2, LuaApi.lua_gettop(s));
+        var values = ReadArguments(environment, s, 2, LuaApi.lua_gettop(s));
 
-        var method = SelectMethod(instance.GetType(), name, args, isStatic: false)
-            ?? throw new MissingMethodException($"No matching method '{instance.GetType().Name}.{name}'.");
+        if (!TrySelectMethod(instance.GetType(), name, values, isStatic: false, out var method, out var args))
+        {
+            throw new MissingMethodException($"No matching method '{instance.GetType().Name}.{name}'.");
+        }
 
         var result = Invoke(method, instance, args);
-        return PushResult(environment, method.ReturnType, result);
+        return PushReturnAndByRefResults(environment, method, result, args);
     });
 
     private static int OnOperator(IntPtr state) => Guarded(state, static s =>
@@ -563,31 +617,29 @@ internal static class Interop
 
         if (method.IsStatic)
         {
-            var arguments = ConvertArguments(ReadArguments(environment, s, 1, LuaApi.lua_gettop(s)), method);
+            var values = ReadArguments(environment, s, 1, LuaApi.lua_gettop(s));
+            if (!TryBindArguments(values, method.GetParameters(), out var arguments))
+            {
+                throw new ArgumentException($"No matching arguments for generic method '{type.Name}.{methodName}'.");
+            }
+
             var result = Invoke(method, null, arguments);
-            return PushResult(environment, method.ReturnType, result);
+            return PushReturnAndByRefResults(environment, method, result, arguments);
         }
         else
         {
             var target = environment.Marshal.GetObjectFromUserdata(1)
                 ?? throw new InvalidOperationException("Lua value is not a C# object.");
-            var arguments = ConvertArguments(ReadArguments(environment, s, 2, LuaApi.lua_gettop(s)), method);
+            var values = ReadArguments(environment, s, 2, LuaApi.lua_gettop(s));
+            if (!TryBindArguments(values, method.GetParameters(), out var arguments))
+            {
+                throw new ArgumentException($"No matching arguments for generic method '{type.Name}.{methodName}'.");
+            }
+
             var result = Invoke(method, target, arguments);
-            return PushResult(environment, method.ReturnType, result);
+            return PushReturnAndByRefResults(environment, method, result, arguments);
         }
     });
-
-    private static object?[] ConvertArguments(object?[] arguments, MethodInfo method)
-    {
-        var parameters = method.GetParameters();
-        var converted = new object?[arguments.Length];
-        for (var i = 0; i < arguments.Length; i++)
-        {
-            converted[i] = ConvertValue(arguments[i], parameters[i].ParameterType);
-        }
-
-        return converted;
-    }
 
     private static string ReadTypeName(IntPtr state, int index)
     {
@@ -624,15 +676,41 @@ internal static class Interop
         }
     }
 
-    private static int PushResult(LuaEnv environment, Type returnType, object? result)
+    private static int PushReturnAndByRefResults(
+        LuaEnv environment,
+        MethodInfo method,
+        object? result,
+        object?[] arguments)
     {
-        if (returnType == typeof(void))
+        var count = 0;
+        if (method.ReturnType != typeof(void))
         {
-            return 0;
+            environment.Marshal.PushObject(result);
+            count++;
         }
 
-        environment.Marshal.PushObject(result);
-        return 1;
+        return count + PushByRefResults(environment, method.GetParameters(), arguments);
+    }
+
+    private static int PushByRefResults(
+        LuaEnv environment,
+        ParameterInfo[] parameters,
+        object?[] arguments)
+    {
+        var count = 0;
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var parameter = parameters[i];
+            if (!parameter.ParameterType.IsByRef || (parameter.IsIn && !parameter.IsOut))
+            {
+                continue;
+            }
+
+            environment.Marshal.PushObject(arguments[i]);
+            count++;
+        }
+
+        return count;
     }
 
     private static object? Invoke(MethodInfo method, object? target, object?[] arguments)
@@ -670,53 +748,6 @@ internal static class Interop
         LuaApi.lua_setmetatable(state, -2);
     }
 
-    private static void CreateClassTable(IntPtr state, string fullName, LuaTypeBinding binding)
-    {
-        LuaApi.lua_createtable(state, 0, 0);
-        LuaApi.lua_pushstring(state, fullName);
-        LuaApi.lua_setfield(state, -2, "__fqn");
-
-        LuaApi.lua_createtable(state, 0, 3);
-
-        if (binding.Call is not null)
-        {
-            LuaApi.lua_pushcclosure(state, NativeMarshal.GetFunctionPointerForDelegate(binding.Call), 0);
-        }
-        else
-        {
-            LuaApi.lua_pushstring(state, fullName);
-            LuaApi.lua_pushcclosure(state, ConstructPointer, 1);
-        }
-
-        LuaApi.lua_setfield(state, -2, "__call");
-
-        if (binding.StaticIndex is not null)
-        {
-            LuaApi.lua_pushcclosure(state, NativeMarshal.GetFunctionPointerForDelegate(binding.StaticIndex), 0);
-        }
-        else
-        {
-            LuaApi.lua_pushstring(state, fullName);
-            LuaApi.lua_pushcclosure(state, StaticIndexPointer, 1);
-        }
-
-        LuaApi.lua_setfield(state, -2, "__index");
-
-        if (binding.StaticNewIndex is not null)
-        {
-            LuaApi.lua_pushcclosure(state, NativeMarshal.GetFunctionPointerForDelegate(binding.StaticNewIndex), 0);
-        }
-        else
-        {
-            LuaApi.lua_pushstring(state, fullName);
-            LuaApi.lua_pushcclosure(state, StaticSetPointer, 1);
-        }
-
-        LuaApi.lua_setfield(state, -2, "__newindex");
-
-        LuaApi.lua_setmetatable(state, -2);
-    }
-
     private static object?[] ReadArguments(LuaEnv environment, IntPtr state, int first, int last)
     {
         if (last < first)
@@ -733,62 +764,145 @@ internal static class Interop
         return arguments;
     }
 
-    private static ConstructorInfo? SelectConstructor(Type type, object?[] arguments)
+    private static bool TrySelectConstructor(
+        Type type,
+        object?[] values,
+        out ConstructorInfo constructor,
+        out object?[] arguments)
     {
-        foreach (var constructor in type.GetConstructors())
+        foreach (var candidate in type.GetConstructors())
         {
-            var parameters = constructor.GetParameters();
-            if (parameters.Length != arguments.Length)
+            if (TryBindArguments(values, candidate.GetParameters(), out arguments))
             {
-                continue;
-            }
-
-            if (TryConvertArguments(arguments, parameters, out var converted))
-            {
-                Array.Copy(converted, arguments, converted.Length);
-                return constructor;
+                constructor = candidate;
+                return true;
             }
         }
 
-        return null;
+        constructor = null!;
+        arguments = [];
+        return false;
     }
 
-    private static MethodInfo? SelectMethod(Type type, string name, object?[] arguments, bool isStatic)
+    private static bool TrySelectMethod(
+        Type type,
+        string name,
+        object?[] values,
+        bool isStatic,
+        out MethodInfo method,
+        out object?[] arguments)
     {
         var flags = BindingFlags.Public | (isStatic ? BindingFlags.Static : BindingFlags.Instance);
-        foreach (var method in type.GetMethods(flags))
+        foreach (var candidate in type.GetMethods(flags))
         {
-            if (method.Name != name || method.GetParameters().Length != arguments.Length)
+            if (candidate.Name != name || candidate.IsGenericMethodDefinition)
             {
                 continue;
             }
 
-            if (TryConvertArguments(arguments, method.GetParameters(), out var converted))
+            if (TryBindArguments(values, candidate.GetParameters(), out arguments))
             {
-                Array.Copy(converted, arguments, converted.Length);
-                return method;
+                method = candidate;
+                return true;
             }
         }
 
-        return null;
+        method = null!;
+        arguments = [];
+        return false;
     }
 
-    private static bool TryConvertArguments(object?[] arguments, ParameterInfo[] parameters, out object?[] converted)
+    private static bool TryBindArguments(
+        object?[] values,
+        ParameterInfo[] parameters,
+        out object?[] arguments)
     {
-        converted = new object?[arguments.Length];
-        for (var i = 0; i < arguments.Length; i++)
+        arguments = new object?[parameters.Length];
+        var valueIndex = 0;
+
+        for (var i = 0; i < parameters.Length; i++)
         {
-            try
+            var parameter = parameters[i];
+            var parameterType = parameter.ParameterType;
+
+            if (parameterType.IsByRef)
             {
-                converted[i] = ConvertValue(arguments[i], parameters[i].ParameterType);
+                var elementType = parameterType.GetElementType()!;
+                if (parameter.IsOut)
+                {
+                    arguments[i] = elementType.IsValueType
+                        ? Activator.CreateInstance(elementType)
+                        : null;
+                    continue;
+                }
+
+                if (valueIndex >= values.Length
+                    || !TryConvert(values[valueIndex++], elementType, out arguments[i]))
+                {
+                    return false;
+                }
+
+                continue;
             }
-            catch (Exception exception) when (exception is InvalidCastException or FormatException or OverflowException or ArgumentException)
+
+            if (IsParamArray(parameter))
+            {
+                var elementType = parameterType.GetElementType()!;
+                var remaining = values.Length - valueIndex;
+                var array = Array.CreateInstance(elementType, remaining);
+                for (var j = 0; j < remaining; j++)
+                {
+                    if (!TryConvert(values[valueIndex + j], elementType, out var item))
+                    {
+                        return false;
+                    }
+
+                    try
+                    {
+                        array.SetValue(item, j);
+                    }
+                    catch (Exception exception) when (exception is InvalidCastException or ArgumentException)
+                    {
+                        return false;
+                    }
+                }
+
+                arguments[i] = array;
+                valueIndex = values.Length;
+                continue;
+            }
+
+            if (valueIndex >= values.Length
+                || !TryConvert(values[valueIndex++], parameterType, out arguments[i]))
             {
                 return false;
             }
         }
 
-        return true;
+        return valueIndex == values.Length;
+    }
+
+    private static bool IsParamArray(ParameterInfo parameter) =>
+        parameter.ParameterType.IsArray
+        && parameter.GetCustomAttributes(typeof(ParamArrayAttribute), inherit: false).Length > 0;
+
+    private static bool TryConvert(object? value, Type target, out object? converted)
+    {
+        try
+        {
+            converted = ConvertValue(value, target);
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is InvalidCastException
+                or FormatException
+                or OverflowException
+                or ArgumentException
+                or NotSupportedException)
+        {
+            converted = null;
+            return false;
+        }
     }
 
     internal static object? ConvertValue(object? value, Type target)

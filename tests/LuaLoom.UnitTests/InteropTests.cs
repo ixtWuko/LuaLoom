@@ -227,9 +227,53 @@ public sealed class InteropTests
         Assert.Equal(2L, env.DoString("return 1 + 1")[0]);
     }
 
+    [Fact]
+    public void RegisteredGenericDelegates_InvokeLua()
+    {
+        using var env = new LuaEnv();
+        var seen = 0;
+        env.RegisterDelegate(typeof(Action<int>), new ActionIntInvoker(value => seen = value));
+        env.RegisterDelegate(typeof(Func<int, int>), new DoubleIntInvoker());
+
+        using var action = (LuaFunction)env.DoString("return function(value) seen = value end")[0]!;
+        using var function = (LuaFunction)env.DoString("return function(value) return value * 2 end")[0]!;
+        env.Global.Set("on_value", action);
+        env.Global.Set("double_value", function);
+        env.Global.Set("seen", 0);
+
+        var onValue = env.Global.Get<Action<int>>("on_value");
+        var doubleValue = env.Global.Get<Func<int, int>>("double_value");
+
+        onValue(7);
+
+        Assert.Equal(7, seen);
+        Assert.Equal(7L, env.Global.Get<long>("seen"));
+        Assert.Equal(10, doubleValue(5));
+    }
+
     private sealed class IntOpInvoker : ILuaDelegateInvoker
     {
         public Delegate Create(LuaFunction function) =>
             new IntOp((a, b) => checked((int)(long)function.Call(a, b)[0]));
+    }
+
+    private sealed class ActionIntInvoker : ILuaDelegateInvoker
+    {
+        private readonly Action<int> _callback;
+
+        public ActionIntInvoker(Action<int> callback) => _callback = callback;
+
+        public Delegate Create(LuaFunction function) =>
+            new Action<int>(value =>
+            {
+                function.Call(value);
+                _callback(value);
+            });
+    }
+
+    private sealed class DoubleIntInvoker : ILuaDelegateInvoker
+    {
+        public Delegate Create(LuaFunction function) =>
+            new Func<int, int>(value => checked((int)(long)function.Call(value)[0]));
     }
 }

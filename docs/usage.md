@@ -66,7 +66,18 @@ using var fn = env.Global.Get<LuaFunction>("on_update");
 fn.Call(0.016);                       // 慢路径，返回 object[]
 ```
 
-高频调用应把函数映射为 delegate（需要在 `csharpCallLua` 中配置）。
+高频调用应把函数映射为 delegate（需要在 `csharpCallLua` 中配置），泛型 delegate 也一样：
+
+```json
+{
+  "csharpCallLua": ["Game.IntCallback", "System.Action<int>", "System.Func<int, string>"]
+}
+```
+
+```csharp
+var onScore = env.Global.Get<Action<int>>("on_score");
+onScore(10);
+```
 
 ## 4. Lua 调用 C#
 
@@ -77,14 +88,20 @@ print(p:Add(1, 2))              -- 实例方法
 print(CS.MyGame.Player.Double(4)) -- 静态方法
 ```
 
-反射兜底覆盖成员访问、操作符、索引器、事件与泛型方法：
+反射兜底覆盖成员访问、操作符、索引器、事件、泛型方法与 `out`/`ref`/`params`：
 
 ```lua
 local c = a + b                 -- op_Addition
 local v = bag[1]                -- this[int]
 emitter:Changed('+', fn)        -- 订阅事件
 local f = lua_loom_generic(CS.MyGame.Utils, 'Convert', CS.System.Int32)
+
+local ok, value = CS.MyGame.Parsing.TryParse('42')  -- 返回值 + out
+local next = CS.MyGame.Parsing.Bump(1)               -- ref 写回
+local text = CS.MyGame.Parsing.Join('-', 1, 2, 3)    -- params 展开
 ```
+
+生成绑定只覆盖热点成员；未生成的成员（包括继承成员、事件、含 `ref`/`out`/`params` 的方法）会自动回落到反射。绑定自己返回 `nil` 的成员不会被误判为「未处理」。
 
 ## 5. delegate 与 interface
 
