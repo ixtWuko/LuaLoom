@@ -811,7 +811,9 @@ internal static class Interop
 
     private static int ReadIndexer(LuaEnv environment, IntPtr state, object instance)
     {
-        var indexer = IndexerOf(instance.GetType());
+        var indexer = IndexerOf(
+            instance.GetType(),
+            environment.IsPrivateAccessible(instance.GetType()));
         if (indexer is null)
         {
             LuaApi.lua_pushnil(state);
@@ -828,7 +830,9 @@ internal static class Interop
 
     private static int WriteIndexer(LuaEnv environment, IntPtr state, object instance)
     {
-        var indexer = IndexerOf(instance.GetType());
+        var indexer = IndexerOf(
+            instance.GetType(),
+            environment.IsPrivateAccessible(instance.GetType()));
         if (indexer is null)
         {
             throw new MissingMemberException(instance.GetType().FullName, "Item");
@@ -843,9 +847,19 @@ internal static class Interop
         return 0;
     }
 
-    private static PropertyInfo? IndexerOf(Type type) =>
-        type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
-            .FirstOrDefault(static p => p.GetIndexParameters().Length == 1);
+    private static PropertyInfo? IndexerOf(Type type, bool includeNonPublic)
+    {
+        var flags = BindingFlags.Public | BindingFlags.Instance;
+        if (includeNonPublic)
+        {
+            flags |= BindingFlags.NonPublic;
+        }
+
+        return type.GetProperties(flags)
+            .Where(static p => p.GetIndexParameters().Length == 1)
+            .OrderBy(static p => p.GetMethod?.IsPublic == true ? 0 : 1)
+            .FirstOrDefault();
+    }
 
     internal static MethodInfo? SearchExtensionMethod(
         IReadOnlyList<Type> extensionTypes,

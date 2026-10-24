@@ -239,6 +239,8 @@ public sealed class PrivateMembers
     private int _secret = 7;
 
     private int Secret() => _secret;
+
+    private int this[int index] => _secret + index;
 }
 
 public static class PlayerExtensions

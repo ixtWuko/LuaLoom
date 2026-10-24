@@ -177,7 +177,7 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 8. 类型解析：先查已注册的 `LuaTypeBinding`，再按 `EnableReflectionFallback` 走反射，最后抛 Lua 错误；类表统一安装带 `fqn` 的分派入口，绑定未命中的键继续走反射。`StrictReflection = true` 时，未注册类型、绑定未命中的成员、反射版构造/事件/操作符/索引器/泛型调用与反射扩展查找都直接抛错；`typeof`、`cast`、`xlua.private_accessible` 等显式反射 API 不受影响。
 9. 参数装配：`out` 填默认值且不消耗实参，`ref` 与普通参数各消耗一个，`params` 把剩余实参转换后写入数组；调用后先压返回值（非 `void`），再按参数顺序压 `ref`/`out`，`in` 不回写。单方法组由生成绑定执行同一规则，复杂重载组回退反射。
 10. 操作符：实例 metatable 上挂 `__add`/`__sub`/`__mul`/`__div`/`__mod`/`__unm`/`__eq`/`__lt`/`__le`；C# delegate 的 `+`/`-` 直接走 `Delegate.Combine`/`Remove`；其余先查配置类型的生成 `Operators`，未命中再按名称查 `op_*` 静态方法。`__unm` 按 Lua 约定收到两个相同操作数，只取第一个匹配单参数方法；`__eq` 无运算符时退回引用比较。
-11. 索引器：键不是字符串时先查绑定的 `InstanceIndexer`/`InstanceIndexerSet`，未处理再走 `this[...]` 反射；字符串键仍按成员名解析。
+11. 索引器：键不是字符串时先查绑定的 `InstanceIndexer`/`InstanceIndexerSet`，未处理再走 `this[...]` 反射；`xlua.private_accessible` 标记后反射索引器也包含非公共成员。字符串键仍按成员名解析。
 12. 事件：配置类型优先返回生成的订阅 thunk，未生成时回退 `EventInfo` 反射。`('+', fn)` 用生成的委托 lambda 或 `LuaEventDelegateFactory` 包装 Lua 函数，`('-', fn)` 按 `lua_topointer` 找到同一函数对应的委托并移除，随后释放函数句柄。订阅关系存放在 `ConditionalWeakTable`，对象被回收时随之释放。Lua 表实现接口时，生成的接口实现把 `add_<Event>`/`remove_<Event>` 转发给表函数；传给 Lua 的 C# delegate 可通过 `__call` 调用。
 13. 泛型方法：`lua_loom_generic(type, methodName, T1, ...)` 解析泛型定义，按类型参数个数匹配；先查生成器注册的闭合实例（`RegisterGenericMethod`），命中直接调用，未命中再 `MakeGenericMethod` 反射闭合；严格模式下未命中直接抛错。静态方法参数从索引 1 开始，实例方法索引 1 是对象、参数从 2 开始。
 14. 扩展方法：实例成员未命中时，先查生成器注册的 `RegisterExtensionMethod` 分派表；未命中再在 `RegisterExtensionType` 注册过的 public static 类中查找 `ExtensionAttribute` 方法。要求首参类型可由实例类型赋值；反射扫描结果按 `(Type, Name)` 缓存。未注册的扩展类不会被扫描或访问。
@@ -225,7 +225,7 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 | 配置类型的事件 | `emitter:Changed('+', fn)` / `('-', fn)` | 走生成的 `Event_*` thunk |
 | `typeof`/`cast`/`uint64` | 脚本调用 | 返回 `Type`、对象视图与无符号结果 |
 | `xlua.get_generic_method` | 调用泛型方法 | 与 `lua_loom_generic` 结果一致 |
-| `xlua.private_accessible` | 访问私有字段/方法 | 标记后可见，标记前不可见 |
+| `xlua.private_accessible` | 访问私有字段/方法/索引器 | 标记后可见，标记前不可见 |
 | `xlua.structclone` | 克隆 struct userdata | 副本内容与原件一致 |
 | table 作为 class 参数 | `Sum({ X = 1, Y = 2 })` | 自动转成 `Point` 后返回 `3` |
 | 只绑定 `Hp` 的 `Player` | 读 `Name`、调 `Join` | 回落反射成功 |
