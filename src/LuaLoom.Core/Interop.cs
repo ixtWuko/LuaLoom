@@ -1365,7 +1365,7 @@ internal static class Interop
         if (value is LuaTable table
             && underlying != typeof(object)
             && !typeof(LuaReference).IsAssignableFrom(underlying)
-            && (underlying.IsClass || underlying.IsInterface
+            && (underlying.IsClass || underlying.IsInterface || underlying.IsArray
                 || (underlying.IsValueType && !underlying.IsPrimitive && !underlying.IsEnum)))
         {
             try

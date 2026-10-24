@@ -139,7 +139,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 单方法 `ref`/`out`/`params` | 与其他重载混合的复杂参数组 |
 | 单方法默认值参数（按缺省值补齐） | 默认值与同参数个数重载混合的组 |
 | 非泛型 delegate 与闭合泛型 delegate（如 `Action<int>`） | 开放泛型 delegate |
-| interface 的方法与属性（含闭合泛型接口） | 接口默认实现、显式接口实现 |
+| interface 的方法与属性（含 `params`/`ref`/`out`/数组与闭合泛型接口） | 接口事件、默认实现、显式接口实现 |
 | 扩展方法类（列入 `luaCallCSharp`，生成注册与分派表） | 未配置的扩展方法不扫描、不可见 |
 | 一维数组参数/返回值（基本类型、字符串、枚举、`object`） | 多维数组、类元素数组 |
 | `decimal` 参数/返回值（struct userdata） | 反射路径的 decimal 自动识别 |
@@ -172,6 +172,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 类型定义事件 | `generate` | 产物包含 `Event_*` thunk 与 `LuaEventBridge` 调用 |
 | 配置扩展类 | `generate` | 产物包含 `RegisterExtensions` 与 `RegisterExtensionMethod` 调用 |
 | 配置类型 | `generate` | 产物包含 `link.xml`，按程序集列出保留类型 |
+| 接口含 `params`/`ref`/`out`/数组 | `generate` + 编译 | 产物实现对应签名并通过 Emit |
 | 派生类 + 已配置基类 | `generate` | 派生类绑定包含基类字段/属性/方法 |
 | 派生类单独配置 | `generate` | 不生成未配置基类成员 |
 | 类型含 `this[int]` | `generate` | 绑定含 `InstanceIndexer`/`InstanceIndexerSet` |

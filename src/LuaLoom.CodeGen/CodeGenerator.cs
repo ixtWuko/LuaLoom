@@ -181,6 +181,11 @@ public static class CodeGenerator
             }
             else if (type.IsInterface)
             {
+                if (!CanGenerateInterface(type))
+                {
+                    continue;
+                }
+
                 var implementation = FileStem(type) + "Impl";
                 files.Add(new GeneratedFile(implementation + ".g.cs", EmitInterfaceImplementation(type, implementation, config)));
                 registrations.Add(
@@ -1431,7 +1436,7 @@ public static class CodeGenerator
                 builder.AppendLine(
                     $"            using var function = _table.Get<global::LuaLoom.LuaFunction>(\"get_{property.Name}\")!;");
                 builder.AppendLine(
-                    $"            return {ConvertResult(property.PropertyType, "function.Call(_table)")};");
+                    $"            return global::LuaLoom.LuaBinding.ConvertObject<{TypeRef(property.PropertyType)}>(function.Call(_table)[0]);");
                 builder.AppendLine("        }");
             }
 
@@ -1451,25 +1456,55 @@ public static class CodeGenerator
         foreach (var method in SupportedMethods(type, BindingFlags.Instance, forBinding: false))
         {
             var parameters = method.GetParameters();
-            var signature = string.Join(
-                ", ",
-                parameters.Select(static p => $"{TypeRef(p.ParameterType)} {p.Name}"));
-            var arguments = string.Join(", ", parameters.Select(static p => p.Name));
-            var call = string.IsNullOrEmpty(arguments) ? "function.Call(_table)" : $"function.Call(_table, {arguments})";
+            var signature = string.Join(", ", parameters.Select(InterfaceParameterSignature));
 
             builder.AppendLine();
             builder.AppendLine($"    public {TypeRef(method.ReturnType)} {method.Name}({signature})");
             builder.AppendLine("    {");
             builder.AppendLine(
                 $"        using var function = _table.Get<global::LuaLoom.LuaFunction>(\"{method.Name}\")!;");
+            builder.AppendLine("        var args = new global::System.Collections.Generic.List<object?>();");
+            builder.AppendLine("        args.Add(_table);");
 
-            if (Is(method.ReturnType, typeof(void)))
+            foreach (var parameter in parameters)
             {
-                builder.AppendLine($"        {call};");
+                if (parameter.IsOut)
+                {
+                    continue;
+                }
+
+                if (IsParamArray(parameter))
+                {
+                    builder.AppendLine($"        foreach (var item in {parameter.Name}) args.Add(item);");
+                }
+                else
+                {
+                    builder.AppendLine($"        args.Add({parameter.Name});");
+                }
             }
-            else
+
+            builder.AppendLine("        var results = function.Call(args.ToArray());");
+            var resultIndex = 0;
+            if (!Is(method.ReturnType, typeof(void)))
             {
-                builder.AppendLine($"        return {ConvertResult(method.ReturnType, call)};");
+                builder.AppendLine(
+                    $"        var result = global::LuaLoom.LuaBinding.ConvertObject<{TypeRef(method.ReturnType)}>(results[{resultIndex++}]);");
+            }
+
+            foreach (var parameter in parameters)
+            {
+                if (!parameter.ParameterType.IsByRef || (parameter.IsIn && !parameter.IsOut))
+                {
+                    continue;
+                }
+
+                builder.AppendLine(
+                    $"        {parameter.Name} = global::LuaLoom.LuaBinding.ConvertObject<{TypeRef(parameter.ParameterType.GetElementType()!)}>(results[{resultIndex++}]);");
+            }
+
+            if (!Is(method.ReturnType, typeof(void)))
+            {
+                builder.AppendLine("        return result;");
             }
 
             builder.AppendLine("    }");
@@ -1551,7 +1586,7 @@ public static class CodeGenerator
         if (!forBinding)
         {
             return methods
-                .Where(static m => IsSupportedSimpleMethod(m))
+                .Where(static m => IsSupportedInterfaceMethod(m))
                 .OrderBy(static m => m.Name, StringComparer.Ordinal)
                 .ThenBy(static m => m.GetParameters().Length)
                 .ToList();
@@ -1787,11 +1822,86 @@ public static class CodeGenerator
         return true;
     }
 
-    private static bool IsSupportedSimpleMethod(MethodInfo method) =>
-        method.GetParameters().All(static p =>
-            !p.ParameterType.IsByRef
-            && !p.ParameterType.IsArray
-            && IsSupportedParameter(p.ParameterType));
+    private static string InterfaceParameterSignature(ParameterInfo parameter)
+    {
+        if (parameter.ParameterType.IsByRef)
+        {
+            var modifier = parameter.IsOut ? "out" : parameter.IsIn ? "in" : "ref";
+            return $"{modifier} {TypeRef(parameter.ParameterType.GetElementType()!)} {parameter.Name}";
+        }
+
+        if (IsParamArray(parameter))
+        {
+            return $"params {TypeRef(parameter.ParameterType)} {parameter.Name}";
+        }
+
+        return $"{TypeRef(parameter.ParameterType)} {parameter.Name}";
+    }
+
+    private static bool IsSupportedInterfaceMethod(MethodInfo method)
+    {
+        if (method.IsGenericMethodDefinition)
+        {
+            return false;
+        }
+
+        if (!Is(method.ReturnType, typeof(void)) && !IsSupportedParameter(method.ReturnType))
+        {
+            return false;
+        }
+
+        foreach (var parameter in method.GetParameters())
+        {
+            if (parameter.ParameterType.IsByRef)
+            {
+                if (!IsSupportedParameter(parameter.ParameterType.GetElementType()!))
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (!IsSupportedParameter(parameter.ParameterType))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool CanGenerateInterface(Type type)
+    {
+        if (type.GetEvents(BindingFlags.Public | BindingFlags.Instance).Length > 0)
+        {
+            return false;
+        }
+
+        foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (method.IsSpecialName || method.IsGenericMethodDefinition)
+            {
+                continue;
+            }
+
+            if (!IsSupportedInterfaceMethod(method))
+            {
+                return false;
+            }
+        }
+
+        foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (property.GetIndexParameters().Length > 0
+                || !IsSupportedParameter(property.PropertyType))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     private static bool HasComplexParameters(MethodInfo method) =>
         method.GetParameters().Any(static p =>
@@ -2065,7 +2175,7 @@ public static class CodeGenerator
             return $"({TypeRef(type)})(long){call}[0]";
         }
 
-        return $"({TypeRef(type)}){call}[0]!";
+        return $"global::LuaLoom.LuaBinding.ConvertObject<{TypeRef(type)}>({call}[0])";
     }
 
     private static string FileStem(Type type) => Sanitize(

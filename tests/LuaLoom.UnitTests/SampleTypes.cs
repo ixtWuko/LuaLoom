@@ -57,6 +57,15 @@ public sealed class Calculator : ICalculator
     public int Value { get; set; }
 }
 
+public interface IArrayCalculator
+{
+    int Sum(int[] values);
+
+    string Join(string separator, params object[] items);
+
+    bool TryParse(string text, out int value);
+}
+
 public delegate int IntOp(int a, int b);
 
 public delegate TResult Mapper<in T, out TResult>(T value);

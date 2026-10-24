@@ -545,6 +545,16 @@ internal sealed class LuaMarshal : IDisposable
             case byte[] bytes:
                 LuaApi.lua_pushlstring(_state, bytes, (nuint)bytes.Length);
                 return;
+            case Array array when array.Rank == 1:
+                LuaApi.lua_createtable(_state, array.Length, 0);
+                var arrayTable = LuaApi.lua_gettop(_state);
+                for (var i = 0; i < array.Length; i++)
+                {
+                    PushObject(array.GetValue(i));
+                    LuaApi.lua_rawseti(_state, arrayTable, i + 1);
+                }
+
+                return;
         }
 
         var custom = FindCustomMarshaler(value.GetType());

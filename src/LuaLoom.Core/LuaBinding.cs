@@ -83,6 +83,9 @@ public static class LuaBinding
     public static object? ReadObject(IntPtr state, int index) =>
         LuaMarshalRegistry.Get(state).ReadObject(index);
 
+    public static T ConvertObject<T>(object? value) =>
+        (T)Interop.ConvertValue(value, typeof(T))!;
+
     public static T ReadObjectAs<T>(IntPtr state, int index)
     {
         var value = LuaMarshalRegistry.Get(state).ReadObject(index);
