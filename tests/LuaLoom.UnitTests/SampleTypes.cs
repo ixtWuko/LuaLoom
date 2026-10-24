@@ -153,6 +153,13 @@ public static class Parsing
     }
 }
 
+public sealed class PrivateMembers
+{
+    private int _secret = 7;
+
+    private int Secret() => _secret;
+}
+
 public static class PlayerExtensions
 {
     public static int Triple(this Player player, int value) => player.Hp * value;

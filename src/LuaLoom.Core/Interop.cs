@@ -42,6 +42,13 @@ internal static class Interop
                 return lua_loom_generic(type, name, ...)
             end
         end
+        function xlua.private_accessible(class)
+            lua_loom_private_accessible(class)
+            return class
+        end
+        function xlua.structclone(value)
+            return lua_loom_structclone(value)
+        end
         """;
 
     private static readonly ConcurrentDictionary<IntPtr, LuaEnv> Environments = new();
@@ -87,6 +94,8 @@ internal static class Interop
     private static readonly LuaCSFunction UInt64CompareCallback = OnUInt64Compare;
     private static readonly LuaCSFunction UInt64RemainderCallback = OnUInt64Remainder;
     private static readonly LuaCSFunction UInt64ParseCallback = OnUInt64Parse;
+    private static readonly LuaCSFunction PrivateAccessibleCallback = OnPrivateAccessible;
+    private static readonly LuaCSFunction StructCloneCallback = OnStructClone;
 
     private static readonly IntPtr TypePointer = NativeMarshal.GetFunctionPointerForDelegate(TypeCallback);
     private static readonly IntPtr ConstructPointer = NativeMarshal.GetFunctionPointerForDelegate(ConstructCallback);
@@ -101,6 +110,8 @@ internal static class Interop
     private static readonly IntPtr UInt64ComparePointer = NativeMarshal.GetFunctionPointerForDelegate(UInt64CompareCallback);
     private static readonly IntPtr UInt64RemainderPointer = NativeMarshal.GetFunctionPointerForDelegate(UInt64RemainderCallback);
     private static readonly IntPtr UInt64ParsePointer = NativeMarshal.GetFunctionPointerForDelegate(UInt64ParseCallback);
+    private static readonly IntPtr PrivateAccessiblePointer = NativeMarshal.GetFunctionPointerForDelegate(PrivateAccessibleCallback);
+    private static readonly IntPtr StructClonePointer = NativeMarshal.GetFunctionPointerForDelegate(StructCloneCallback);
 
     static Interop()
     {
@@ -127,6 +138,10 @@ internal static class Interop
         LuaApi.lua_setglobal(state, "typeof");
         LuaApi.lua_pushcclosure(state, CastPointer, 0);
         LuaApi.lua_setglobal(state, "cast");
+        LuaApi.lua_pushcclosure(state, PrivateAccessiblePointer, 0);
+        LuaApi.lua_setglobal(state, "lua_loom_private_accessible");
+        LuaApi.lua_pushcclosure(state, StructClonePointer, 0);
+        LuaApi.lua_setglobal(state, "lua_loom_structclone");
         CreateUInt64Table(state);
 
         environment.DoString(Bootstrap, "=lua_loom_cs");
@@ -279,6 +294,37 @@ internal static class Interop
         return 1;
     });
 
+    private static int OnPrivateAccessible(IntPtr state) => Guarded(state, static s =>
+    {
+        var environment = GetEnvironment(s);
+        var type = ResolveTypeArgument(environment, s, 1);
+        environment.MakePrivateAccessible(type);
+        return 0;
+    });
+
+    private static int OnStructClone(IntPtr state) => Guarded(state, static s =>
+    {
+        if (LuaApi.lua_type(s, 1) != LuaApi.LuaTUserData)
+        {
+            throw new ArgumentException("structclone expects a struct userdata.");
+        }
+
+        var length = LuaApi.lua_rawlen(s, 1);
+        var source = LuaApi.lua_touserdata(s, 1);
+        if (length == 0 || source == IntPtr.Zero)
+        {
+            throw new ArgumentException("structclone expects a struct userdata.");
+        }
+
+        var target = LuaApi.Profile.NewUserdata(s, length);
+        unsafe
+        {
+            Unsafe.CopyBlock(target.ToPointer(), source.ToPointer(), checked((uint)length));
+        }
+
+        return 1;
+    });
+
     private static ulong ReadUInt64(IntPtr state, int index)
     {
         if (LuaApi.lua_type(state, index) != LuaApi.LuaTNumber)
@@ -343,7 +389,7 @@ internal static class Interop
         }
 
         var values = ReadArguments(environment, s, 2, LuaApi.lua_gettop(s));
-        if (!TrySelectConstructor(type, values, out var constructor, out var args))
+        if (!TrySelectConstructor(type, values, MemberFlags(environment, type, isStatic: false), out var constructor, out var args))
         {
             throw new MissingMethodException(
                 $"No matching constructor for '{type.Name}' with {values.Length} argument(s).");
@@ -372,7 +418,7 @@ internal static class Interop
         var type = ResolveType(fullName) ?? throw new InvalidOperationException("Type not found.");
         var name = ReadString(s, 2);
 
-        const BindingFlags flags = BindingFlags.Public | BindingFlags.Static;
+        var flags = MemberFlags(environment, type, isStatic: true);
         var property = type.GetProperty(name, flags);
         if (property is not null)
         {
@@ -421,7 +467,7 @@ internal static class Interop
         var name = ReadString(s, 2);
         var value = environment.Marshal.ReadObject(3);
 
-        const BindingFlags flags = BindingFlags.Public | BindingFlags.Static;
+        var flags = MemberFlags(environment, type, isStatic: true);
         var property = type.GetProperty(name, flags);
         if (property is not null)
         {
@@ -470,7 +516,7 @@ internal static class Interop
         var name = ReadString(s, 2);
         var type = instance.GetType();
 
-        const BindingFlags flags = BindingFlags.Public | BindingFlags.Instance;
+        var flags = MemberFlags(environment, type, isStatic: false);
         var property = type.GetProperty(name, flags);
         if (property is not null)
         {
@@ -554,7 +600,7 @@ internal static class Interop
         var value = environment.Marshal.ReadObject(3);
         var type = instance.GetType();
 
-        const BindingFlags flags = BindingFlags.Public | BindingFlags.Instance;
+        var flags = MemberFlags(environment, type, isStatic: false);
         var property = type.GetProperty(name, flags);
         if (property is not null)
         {
@@ -575,7 +621,14 @@ internal static class Interop
         var name = GetUpvalueString(s, 2);
         var values = ReadArguments(environment, s, 1, LuaApi.lua_gettop(s));
 
-        if (!TrySelectMethod(type, name, values, isStatic: true, out var method, out var args))
+        if (!TrySelectMethod(
+            type,
+            name,
+            values,
+            isStatic: true,
+            MemberFlags(environment, type, isStatic: true),
+            out var method,
+            out var args))
         {
             throw new MissingMethodException($"No matching static method '{type.Name}.{name}'.");
         }
@@ -592,7 +645,14 @@ internal static class Interop
         var name = GetUpvalueString(s, 1);
         var values = ReadArguments(environment, s, 2, LuaApi.lua_gettop(s));
 
-        if (!TrySelectMethod(instance.GetType(), name, values, isStatic: false, out var method, out var args))
+        if (!TrySelectMethod(
+            instance.GetType(),
+            name,
+            values,
+            isStatic: false,
+            MemberFlags(environment, instance.GetType(), isStatic: false),
+            out var method,
+            out var args))
         {
             throw new MissingMethodException($"No matching method '{instance.GetType().Name}.{name}'.");
         }
@@ -631,7 +691,13 @@ internal static class Interop
         var type = left.GetType();
         var isUnary = methodName == "op_UnaryNegation";
         var parameterCount = isUnary ? 1 : argumentCount;
-        var method = type.GetMethods(BindingFlags.Public | BindingFlags.Static)
+        var operatorFlags = BindingFlags.Public | BindingFlags.Static;
+        if (environment.IsPrivateAccessible(type))
+        {
+            operatorFlags |= BindingFlags.NonPublic;
+        }
+
+        var method = type.GetMethods(operatorFlags)
             .FirstOrDefault(m => m.Name == methodName && m.GetParameters().Length == parameterCount);
 
         if (method is null)
@@ -742,7 +808,9 @@ internal static class Interop
         var instance = environment.Marshal.GetObjectFromUserdata(1)
             ?? throw new InvalidOperationException("Lua value is not a C# object.");
         var operation = ReadString(s, 2);
-        var eventInfo = instance.GetType().GetEvent(name, BindingFlags.Public | BindingFlags.Instance)
+        var eventInfo = instance.GetType().GetEvent(
+                name,
+                MemberFlags(environment, instance.GetType(), isStatic: false))
             ?? throw new MissingMemberException(instance.GetType().FullName, name);
 
         if (LuaApi.lua_type(s, 3) != LuaApi.LuaTFunction)
@@ -828,8 +896,14 @@ internal static class Interop
                 ?? throw new InvalidOperationException($"Generic argument '{typeNames[i]}' not found.");
         }
 
+        var methodFlags = BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance;
+        if (environment.IsPrivateAccessible(type))
+        {
+            methodFlags |= BindingFlags.NonPublic;
+        }
+
         var definition = type
-            .GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance)
+            .GetMethods(methodFlags)
             .FirstOrDefault(m => m.Name == methodName
                 && m.IsGenericMethodDefinition
                 && m.GetGenericArguments().Length == genericArguments.Length)
@@ -1002,6 +1076,7 @@ internal static class Interop
     private static bool TrySelectConstructor(
         Type type,
         object?[] values,
+        BindingFlags flags,
         out ConstructorInfo constructor,
         out object?[] arguments)
     {
@@ -1009,7 +1084,7 @@ internal static class Interop
         arguments = [];
         var bestScore = int.MinValue;
 
-        foreach (var candidate in type.GetConstructors())
+        foreach (var candidate in type.GetConstructors(flags))
         {
             if (TryBindArguments(values, candidate.GetParameters(), out var candidateArguments, out var score)
                 && score > bestScore)
@@ -1028,10 +1103,10 @@ internal static class Interop
         string name,
         object?[] values,
         bool isStatic,
+        BindingFlags flags,
         out MethodInfo method,
         out object?[] arguments)
     {
-        var flags = BindingFlags.Public | (isStatic ? BindingFlags.Static : BindingFlags.Instance);
         method = null!;
         arguments = [];
         var bestScore = int.MinValue;
@@ -1320,6 +1395,18 @@ internal static class Interop
         }
 
         return Convert.ChangeType(value, underlying, CultureInfo.InvariantCulture);
+    }
+
+    private static BindingFlags MemberFlags(LuaEnv environment, Type type, bool isStatic)
+    {
+        var flags = BindingFlags.Public
+            | (isStatic ? BindingFlags.Static | BindingFlags.FlattenHierarchy : BindingFlags.Instance);
+        if (environment.IsPrivateAccessible(type))
+        {
+            flags |= BindingFlags.NonPublic;
+        }
+
+        return flags;
     }
 
     private static Type? ResolveType(string fullName) => TypeCache.GetOrAdd(fullName, static name =>

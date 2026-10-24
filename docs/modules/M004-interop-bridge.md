@@ -49,7 +49,7 @@
 | E17 | `params` 把剩余实参打包成数组，允许 0 个实参；单方法组可由生成绑定处理 | `Join('-', 1, 2, 3)` 与 `Sum()` |
 | E18 | 实例成员未命中时可调用扩展方法，实例作为首参 | `p:Triple(2)` 返回 `p.Hp * 2` |
 | E19 | 一维数组参数/返回值可由生成绑定编解码，元素类型受支持 | `Sum(int[])` 与 `Double(int[])` |
-| E20 | xLua 兼容 API：`typeof`、`cast`、`uint64.*`、`xlua.get_generic_method` | 对应脚本断言 |
+| E20 | xLua 兼容 API：`typeof`、`cast`、`uint64.*`、`xlua.get_generic_method`、`xlua.private_accessible`、`xlua.structclone` | 对应脚本断言 |
 | E21 | Lua table 作为方法参数时自动转换为 class/struct/interface | `PointMath.Sum({ X = 1, Y = 2 })` |
 
 **非目标**
@@ -180,7 +180,7 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 12. 事件：配置类型优先返回生成的订阅 thunk，未生成时回退 `EventInfo` 反射。`('+', fn)` 用生成的委托 lambda 或 `LuaEventDelegateFactory` 包装 Lua 函数，`('-', fn)` 按 `lua_topointer` 找到同一函数对应的委托并移除，随后释放函数句柄。订阅关系存放在 `ConditionalWeakTable`，对象被回收时随之释放。
 13. 泛型方法：`lua_loom_generic(type, methodName, T1, ...)` 解析泛型定义，按类型参数个数匹配，`MakeGenericMethod` 闭合后返回调用器；静态方法参数从索引 1 开始，实例方法索引 1 是对象、参数从 2 开始。
 14. 扩展方法：实例成员未命中时，只在 `RegisterExtensionType` 注册过的 public static 类中查找 `ExtensionAttribute` 方法，要求首参类型可由实例类型赋值；结果按 `(Type, Name)` 缓存，命中后复用静态方法调用闭包。未注册的扩展类不会被扫描或访问。
-15. xLua 兼容 API：`typeof` 返回 `Type` 对象；`cast` 校验对象可赋值后返回同一对象视图；`uint64.*` 用无符号位模式实现解析、比较、除法与取模；`xlua.get_generic_method` 是 `lua_loom_generic` 的 `xlua` 命名空间别名。
+15. xLua 兼容 API：`typeof` 返回 `Type` 对象；`cast` 校验对象可赋值后返回同一对象视图；`uint64.*` 用无符号位模式实现解析、比较、除法与取模；`xlua.get_generic_method` 是 `lua_loom_generic` 的 `xlua` 命名空间别名；`xlua.private_accessible` 把类型加入非公共成员可见集合；`xlua.structclone` 复制原始 struct userdata 字节。
 
 **复杂度**：`Cast` O(成员数)（缓存后不再反射查找）；delegate 调用 O(1)；反射兜底按成员名查找，未做跨调用缓存。
 
@@ -224,6 +224,8 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 | 配置类型的事件 | `emitter:Changed('+', fn)` / `('-', fn)` | 走生成的 `Event_*` thunk |
 | `typeof`/`cast`/`uint64` | 脚本调用 | 返回 `Type`、对象视图与无符号结果 |
 | `xlua.get_generic_method` | 调用泛型方法 | 与 `lua_loom_generic` 结果一致 |
+| `xlua.private_accessible` | 访问私有字段/方法 | 标记后可见，标记前不可见 |
+| `xlua.structclone` | 克隆 struct userdata | 副本内容与原件一致 |
 | table 作为 class 参数 | `Sum({ X = 1, Y = 2 })` | 自动转成 `Point` 后返回 `3` |
 | 只绑定 `Hp` 的 `Player` | 读 `Name`、调 `Join` | 回落反射成功 |
 | 空绑定 + `Emitter` | 订阅 `Changed` 并 `Raise` | 回调收到参数 |

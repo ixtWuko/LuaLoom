@@ -10,6 +10,7 @@ public sealed partial class LuaEnv
     private readonly Dictionary<Type, Func<LuaTable, object>> _interfaceBindings = new();
     private readonly List<Type> _extensionTypes = new();
     private readonly Dictionary<(Type Type, string Name), (bool Found, MethodInfo? Method)> _extensionCache = new();
+    private readonly HashSet<Type> _privateAccessible = new();
 
     public void RegisterType(LuaTypeBinding binding)
     {
@@ -53,6 +54,16 @@ public sealed partial class LuaEnv
             _extensionCache.Clear();
         }
     }
+
+    /// <summary>允许反射访问指定类型的非公共成员。</summary>
+    public void MakePrivateAccessible(Type type)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        EnsureReady();
+        _privateAccessible.Add(type);
+    }
+
+    internal bool IsPrivateAccessible(Type type) => _privateAccessible.Contains(type);
 
     internal MethodInfo? FindExtensionMethod(Type type, string name)
     {
