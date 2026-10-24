@@ -7,7 +7,7 @@
 **场景**
 
 - 怀疑某段 Lua 逻辑慢：`StartProfile()` 采集一段时间，`StopProfile()` 拿到按总耗时、平均耗时或调用次数排序的表。
-- 怀疑 Lua 内存持续增长：`MemorySnapshot()` 输出占用最大的表、upvalue 与全局变量，用于定位泄漏点。
+- 怀疑 Lua 内存持续增长：`MemorySnapshot()` 输出占用最大的表、全局变量与注册表项，用于定位泄漏点。
 
 **边界**
 
@@ -22,7 +22,7 @@
 | E1 | `StartProfile` 后执行 1 万次函数调用，`StopProfile` 报告的调用次数与预期一致（误差 ≤ 1%） | 用例中固定循环次数 |
 | E2 | 报告含函数名、源文件与行号、总时长、平均时长、占比、调用次数 | 逐列检查 |
 | E3 | 关闭采集后再次执行业务，`StopProfile` 抛 `InvalidOperationException` | 断言异常 |
-| E4 | `MemorySnapshot` 输出含表名、估算字节数、类型（`GLOBAL`/`UPVALUE`/`REGISTRY`）、稳定的对象标识 | 逐列检查，标识在未重建时保持不变 |
+| E4 | `MemorySnapshot` 输出含表名、估算字节数、类型（`GLOBAL`/`REGISTRY`）、稳定的对象标识 | 逐列检查，标识在未重建时保持不变 |
 | E5 | 循环往同一张表插入 1 万个元素，快照中该表尺寸单调增长 | 两次快照对比 |
 | E6 | 采集期间脚本报错，`StopProfile` 仍能返回已采集数据 | 触发错误后取报告 |
 

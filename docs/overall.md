@@ -158,9 +158,7 @@ Interop        句柄方法补全（Cast）、DelegateBridge、InterfaceBridge�
 │   ├── LuaLoom.Sample/         # 端到端示例，含 Generated/
 │   └── LuaLoom.Sample.Types/   # 示例类型库，生成器的输入
 ├── tests/
-│   ├── LuaLoom.UnitTests/
-│   ├── LuaLoom.IntegrationTests/
-│   └── LuaLoom.Benchmarks/
+│   └── LuaLoom.UnitTests/
 ├── build/                      # 原生构建中间产物，不入库
 └── artifacts/                  # 构建与测试产物，不入库
 ```
