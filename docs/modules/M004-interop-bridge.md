@@ -34,7 +34,7 @@
 | E2 | 接口映射生成路径返回实现类实例，方法调用直达 Lua 表 | 调方法后 Lua 侧计数变化 |
 | E3 | 未生成 delegate 时抛 `LuaConversionException`，消息提示在 `lua-loom.json` 的 `csharpCallLua` 中加入该委托类型并重新生成 | 断言消息 |
 | E4 | 未生成接口实现时 `DispatchProxy` 兜底可用，方法调用返回正确值 | 不生成接口绑定直接调用 |
-| E5 | 反射重载按「精确类型 > 可转换 > 默认值」评分；生成路径按 Lua 类型条件分派，无法覆盖时回退反射 | `Pick(string)` / `Pick(object)`、`Pick(int)` / `Pick(long)` |
+| E5 | 反射重载按「精确类型 > 可转换 > 默认值」评分；生成路径按 Lua 类型条件分派，未配置或生成器不支持时回退反射 | `Pick(string)` / `Pick(object)`、`Pick(int)` / `Pick(long)` |
 | E6 | 反射兜底与生成路径对同一成员调用结果一致 | 同一用例跑两遍比对 |
 | E7 | 反射兜底里 C# 抛出的异常转成 Lua 错误，脚本可 `pcall` 捕获 | 脚本断言 |
 | E8 | `Cast<T>` 是值拷贝，C# 侧修改不回写原表 | 修改后读表值不变 |
@@ -46,7 +46,7 @@
 | E14 | 基本类型数组与 `List` 读取走专用路径，不逐元素装箱 | `int[1000]` 分配量小于 8KB |
 | E15 | 绑定只覆盖部分成员时，未命中的键回落到反射，继承成员与事件仍可用 | 只绑定 `Hp` 后读 `Name`、订阅事件 |
 | E16 | `out` 不消耗实参、`ref` 消耗实参；生成绑定与反射都按「返回值 → `ref`/`out`」返回 | `TryParse('42')` 返回 `true, 42`；`Bump(1)` 返回 `2` |
-| E17 | `params` 把剩余实参打包成数组，允许 0 个实参；单方法组可由生成绑定处理 | `Join('-', 1, 2, 3)` 与 `Sum()` |
+| E17 | `params` 把剩余实参打包成数组，允许 0 个实参；单方法与混合重载组都可由生成绑定处理 | `Join('-', 1, 2, 3)` 与 `Sum()` |
 | E18 | 实例成员未命中时可调用扩展方法，实例作为首参 | `p:Triple(2)` 返回 `p.Hp * 2` |
 | E19 | 一维/矩形数组参数/返回值可由生成绑定编解码，元素类型受支持 | `Sum(int[])`、`Double(int[])`、`SumMatrix(int[,])` |
 | E20 | xLua 兼容 API：`typeof`、`cast`、`uint64.*`、`xlua.get_generic_method`、`xlua.private_accessible`、`xlua.structclone` | 对应脚本断言 |
@@ -59,7 +59,6 @@
 - 动态类型与 `ExpandoObject` 映射。
 - 自定义集合适配（只支持 `Dictionary`、`List` 与数组）。
 - 泛型方法的全组合生成；只有 `genericMethods` 显式列出的闭合实例走生成路径。
-- 生成路径的 `ref`/`out`/`params` thunk（先由反射承担）。
 - 泛型扩展方法与扩展方法组的歧义消解（只取第一个匹配的公开静态方法）。
 
 ## 使用与交互设计
@@ -92,6 +91,7 @@ public sealed class LuaTypeBinding
     public LuaCSFunction? InstanceNewIndex { get; init; } // (userdata, 键, 值)；返回 1 + nil 表示未处理
     public LuaCSFunction? InstanceIndexer { get; init; }  // 非字符串键索引器读取
     public LuaCSFunction? InstanceIndexerSet { get; init; } // 非字符串键索引器写入
+    public IReadOnlyDictionary<string, LuaCSFunction>? Operators { get; init; }
 }
 
 public sealed partial class LuaEnv
@@ -99,7 +99,10 @@ public sealed partial class LuaEnv
     public void RegisterType(LuaTypeBinding binding);
     public void RegisterDelegate(Type delegateType, ILuaDelegateInvoker invoker);
     public void RegisterInterface(Type interfaceType, Func<LuaTable, object> factory);
+    public void RegisterCast(Type type, Func<LuaTable, object> cast);
+    public void RegisterGenericMethod(Type type, string methodName, Type[] typeArguments, LuaCSFunction handler);
     public void RegisterExtensionType(Type extensionType);
+    public void RegisterExtensionMethod(Type targetType, string name, LuaCSFunction handler);
 }
 ```
 
@@ -114,7 +117,7 @@ using var handlers = env.Global.Get<LuaTable>("on_hit");
 using var onHit = handlers.Get<LuaFunction>("callback");
 var result = onHit.Call(1, "slash");                // 慢路径，返回 object[]
 
-LuaBindings.Register(env);                          // 生成代码的注册入口，内部调 RegisterType
+LuaBindings.Register(env);                          // 生成代码注册入口，内部调 RegisterType/RegisterCast 等
 env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 ```
 
@@ -137,25 +140,18 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 
 | 目标类型 | 规则 |
 | :-- | :-- |
-| 类 | 无参构造 + 公共可写属性/字段逐项赋值 |
-| struct | 逐字段赋值，缺失键保留默认值 |
+| 类 | 优先用生成的 `RegisterCast`；未生成时无参构造 + 公共可写属性/字段逐项赋值 |
+| struct | 优先用生成的 `RegisterCast`；未生成时逐字段赋值，缺失键保留默认值 |
 | `Dictionary<K,V>` | 遍历表所有键值，逐个转换 |
-| `List<T>` / `T[]` | 从 1 开始按 `Length` 读取 |
+| `List<T>` / `T[]` | 从 1 开始按 `Length` 读取，元素可为 class/struct |
+| `T[,]` | 按嵌套表递归读取，维度取每层 `rawlen` |
 | 接口 | 优先用生成的实现类；否则 `DispatchProxy` 生成代理，方法调用转成表字段查找 |
 
 `ILuaDelegateInvoker`（生成代码实现）：
 
 | 成员 | 签名 | 说明 |
 | :-- | :-- | :-- |
-| `Invoke` | `object? Invoke(object?[] args)` | 把参数打包成 `object[]` 调 Lua，返回值再拆 |
-
-成员缓存键：
-
-| 字段 | 类型 | 含义 |
-| :-- | :-- | :-- |
-| `Type` | `Type` | 声明类型 |
-| `Name` | `string` | 成员名 |
-| `ParameterTypes` | `Type[]?` | 方法参数类型，属性为 `null` |
+| `Create` | `Delegate Create(LuaFunction function)` | 把 Lua 函数包装成目标 delegate 类型 |
 
 `CS` 表：
 
@@ -168,14 +164,14 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 **算法**
 
 1. `Cast<T>` 分派：先查生成器注册的 `RegisterCast` 强类型转换；未命中时类与 struct 走缓存好的成员赋值表逐项填充，`Dictionary`/`List`/数组走 M002 原语；接口走生成实现类，缺失时用 `DispatchProxy` 兜底。
-2. 成员赋值表首次用反射构建，键为 `(Type, 表)`；后续直接调用缓存，不再走反射查找。
+2. 未注册生成转换时，`CastObject` 每次按公共可写属性/字段遍历；生成转换通过 `RegisterCast` 避免这层反射。
 3. delegate 创建：按 delegate 类型查生成的 invoker；未命中抛 `LuaConversionException`，消息提示配置项与重新生成。创建后复用同一引用 id，不重复 `luaL_ref`。反向传入 Lua 的 C# delegate 以对象 userdata 暴露，metatable 的 `__call` 用 `DynamicInvoke` 调用，参数与 `ref`/`out`/`params` 复用同一装配规则。
 4. 接口代理兜底：`DispatchProxy.Create<T, LuaInterfaceProxy>()`；`Invoke` 按方法名查表，参数与返回值走 M002，转换失败抛 `LuaConversionException`。
 5. 反射兜底（Lua 调 C#）：按成员名查 `PropertyInfo`/`FieldInfo`/`MethodInfo`/`EventInfo`；绑定 thunk 返回未处理时进入这一层，事件与索引器沿用各自的闭包路径。
 6. 句柄的释放与终结器由 M002 负责，本模块只消费引用 id。
-7. 重载解析：反射路径按参数形状装配并评分，精确类型优先，其次可转换类型，最后是可使用默认值的候选；得分最高者胜出，同分取声明顺序第一个。生成路径对同参数个数重载按 Lua 类型条件分派，无法覆盖的组合回退反射。
+7. 重载解析：反射路径按参数形状装配并评分，精确类型优先，其次可转换类型，最后是可使用默认值的候选；得分最高者胜出，同分取声明顺序第一个。生成路径按 Lua 类型条件与动态 arity 分派，未配置或生成器不支持的组合才回退反射。
 8. 类型解析：先查已注册的 `LuaTypeBinding`，再按 `EnableReflectionFallback` 走反射，最后抛 Lua 错误；类表统一安装带 `fqn` 的分派入口，绑定未命中的键继续走反射。`StrictReflection = true` 时，未注册类型、绑定未命中的成员、反射版构造/事件/操作符/索引器/泛型调用与反射扩展查找都直接抛错；`typeof`、`cast`、`xlua.private_accessible` 等显式反射 API 不受影响。
-9. 参数装配：`out` 填默认值且不消耗实参，`ref` 与普通参数各消耗一个，`params` 把剩余实参转换后写入数组；调用后先压返回值（非 `void`），再按参数顺序压 `ref`/`out`，`in` 不回写。单方法组由生成绑定执行同一规则，复杂重载组回退反射。
+9. 参数装配：`out` 填默认值且不消耗实参，`ref` 与普通参数各消耗一个，`params` 把剩余实参转换后写入数组；调用后先压返回值（非 `void`），再按参数顺序压 `ref`/`out`，`in` 不回写。生成绑定对单方法与复杂重载组执行同一规则；只有未配置或无法生成的成员才回退反射。
 10. 操作符：实例 metatable 上挂 `__add`/`__sub`/`__mul`/`__div`/`__mod`/`__unm`/`__eq`/`__lt`/`__le`；C# delegate 的 `+`/`-` 直接走 `Delegate.Combine`/`Remove`；其余先查配置类型的生成 `Operators`，未命中再按名称查 `op_*` 静态方法。`__unm` 按 Lua 约定收到两个相同操作数，只取第一个匹配单参数方法；`__eq` 无运算符时退回引用比较。
 11. 索引器：键不是字符串时先查绑定的 `InstanceIndexer`/`InstanceIndexerSet`，未处理再走 `this[...]` 反射；`xlua.private_accessible` 标记后反射索引器也包含非公共成员。字符串键仍按成员名解析。
 12. 事件：配置类型优先返回生成的订阅 thunk，未生成时回退 `EventInfo` 反射。`('+', fn)` 用生成的委托 lambda 或 `LuaEventDelegateFactory` 包装 Lua 函数，`('-', fn)` 按 `lua_topointer` 找到同一函数对应的委托并移除，随后释放函数句柄。订阅关系存放在 `ConditionalWeakTable`，对象被回收时随之释放。Lua 表实现接口时，生成的接口实现把 `add_<Event>`/`remove_<Event>` 转发给表函数；传给 Lua 的 C# delegate 可通过 `__call` 调用。
@@ -183,7 +179,7 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 14. 扩展方法：实例成员未命中时，先查生成器注册的 `RegisterExtensionMethod` 分派表；未命中再在 `RegisterExtensionType` 注册过的 public static 类中查找 `ExtensionAttribute` 方法。要求首参类型可由实例类型赋值；反射扫描结果按 `(Type, Name)` 缓存。未注册的扩展类不会被扫描或访问。
 15. xLua 兼容 API：`typeof` 返回 `Type` 对象；`cast` 校验对象可赋值后返回同一对象视图；`uint64.*` 用无符号位模式实现解析、比较、除法与取模；`xlua.get_generic_method` 是 `lua_loom_generic` 的 `xlua` 命名空间别名；`xlua.private_accessible` 把类型加入非公共成员可见集合；`xlua.structclone` 复制原始 struct userdata 字节。
 
-**复杂度**：`Cast` O(成员数)（缓存后不再反射查找）；delegate 调用 O(1)；反射兜底按成员名查找，未做跨调用缓存。
+**复杂度**：生成 `Cast` O(成员数)，反射 `Cast` 每次都要查找成员；delegate 调用 O(1)；反射兜底按成员名查找，未做跨调用缓存。
 
 **接口契约与错误传播**
 

@@ -110,7 +110,7 @@ Interop        句柄方法补全（Cast）、DelegateBridge、InterfaceBridge�
 本库无图形界面。对外呈现为三层：
 
 - **公共 API**：`LuaEnv`、`LuaTable`、`LuaFunction`、`LuaReference`、`LuaException`、`ILibraryLoader`、`ITypeMarshaler`；另有生成代码专用的 `LuaBinding`。公共类型数量在模块文档中逐一定义，不额外暴露实现类型。
-- **命令行**：`lua-loom-gen`，子命令 `generate` 与 `check`，参数 `--config`，成功退出码 `0`，失败打印诊断并返回非 `0`。
+- **命令行**：`lua-loom-gen`，子命令 `generate` 与 `check`，参数 `--config` 与可选 `--coverage`，成功退出码 `0`，失败打印诊断并返回非 `0`。
 - **示例程序**：`samples/LuaLoom.Sample`，控制台输出每步结果与耗时，末尾打印 `ALL PASSED`。
 
 ## 模块划分

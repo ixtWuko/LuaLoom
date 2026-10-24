@@ -111,11 +111,11 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 
 | 文件 | 内容 |
 | :-- | :-- |
-| `<Type>.g.cs` | 类型绑定：`LuaTypeBinding` 的构造、`StaticIndex`/`StaticNewIndex`、`InstanceIndex`/`InstanceNewIndex` 五个 thunk |
+| `<Type>.g.cs` | 类型绑定：`LuaTypeBinding` 的构造、`StaticIndex`/`StaticNewIndex`、`InstanceIndex`/`InstanceNewIndex` 五个 thunk，以及可选的 `Cast`、操作符/事件/扩展方法分派 |
 | `<Delegate>.g.cs` | 实现 `ILuaDelegateInvoker.Create(LuaFunction)`，返回按参数类型直接调 `LuaBinding` 原语的 delegate |
 | `<Interface>.g.cs` | 实现接口，成员转成表字段与方法调用 |
 | `LuaBindings.g.cs` | 显式注册入口 `LuaBindings.Register(LuaEnv env)`，把类型绑定与 invoker 注册进环境 |
-| `link.xml` | 按配置类型生成 IL2CPP 裁剪保留清单 |
+| `link.xml` | 按配置类型、`reflectionUse`、`gcOptimize` 生成 IL2CPP 裁剪保留清单 |
 
 **算法**
 
@@ -185,6 +185,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 类型含 `[Obsolete]` 方法/字段 | `generate` | 产物不含该成员 |
 | 类型含同参数个数重载 | `generate` | 产物包含类型条件分派，编译通过 |
 | 单方法带默认值参数 | `generate` | 产物按实参个数生成分支，编译通过 |
+| 默认值、`out`/`ref`/`params` 混合重载组 | `generate` + 运行 | 统一动态 arity 分派，调用命中正确重载 |
 | 单方法 `out`/`ref`/`params` | `generate` | 产物生成 `out`/`ref` 调用与数组装配，编译通过 |
 | 方法参数/返回值为 `int[]` | `generate` | 产物使用 `ReadArray<int>` / `PushArray<int>`，编译通过 |
 | 类型定义 `+`/`==` 等操作符 | `generate` | 产物包含 `Operators` 字典，编译通过 |

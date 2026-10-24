@@ -179,9 +179,9 @@ pwsh scripts/ci.ps1 -Version 53  # Lua 5.3
 - 平台：Windows x64 本地验证，Linux x64 与 macOS arm64 由 CI 验证；Windows arm64、Linux arm64、iOS/Android/WebGL 未覆盖。不含 LuaJIT。
 - Lua 版本在构建时二选一（5.3.6 / 5.4.9），同一进程不能混用两个版本；5.5 仅预留画像。
 - 虚拟机与句柄是单线程的，跨线程调用抛异常。
-- 生成器覆盖 public 构造、字段、属性、非字符串索引器、方法（含同参数个数重载、单方法默认值/`ref`/`out`/`params`）、受支持元素类型的一维数组参数/返回值、操作符、非泛型与闭合泛型 delegate（如 `Action<int>`）以及接口；继承成员仅在基类也加入 `luaCallCSharp` 时生成。泛型类型、泛型方法、多维数组与类元素数组不在生成范围内，由反射路径处理。扩展类需要加入 `luaCallCSharp`，未配置的扩展方法不可见。绑定未命中的键会自动回落，不会变成 `nil`。已提供 `typeof`、`cast`、`uint64.*`、`xlua.get_generic_method`、`xlua.private_accessible`、`xlua.structclone` 等兼容 API；Lua table 作为方法参数时会按 `Cast<T>` 规则转换为 class/struct/interface。
-- 未生成 delegate 时，`Get<TDelegate>` 会抛异常；接口有 `DispatchProxy` 兜底，事件委托由表达式树现场生成。
-- 生成器会输出 `link.xml` 保留配置类型，供 Unity IL2CPP 裁剪使用；NativeAOT 的完整裁剪验证尚未覆盖。
+- 生成器覆盖 public 构造、字段、属性、非字符串索引器、方法（含同参数个数重载、`ref`/`out`/`params`/默认值混合组）、一维与矩形数组（含类元素）、操作符、事件、非泛型与闭合泛型 delegate（如 `Action<int>`）以及接口（含事件和无约束泛型方法）；`genericMethods` 可显式生成闭合泛型方法。继承成员仅在直接基类也加入 `luaCallCSharp` 时生成。泛型类型全组合、通用 struct 零 GC pack/unpack、带约束的泛型接口方法仍不在生成范围内，由反射或人工配置处理。扩展类需要加入 `luaCallCSharp`，未配置的扩展方法不可见。绑定未命中的键会自动回落，不会变成 `nil`；`StrictReflection` 可关闭回落。已提供 `typeof`、`cast`、`uint64.*`、`xlua.get_generic_method`、`xlua.private_accessible`、`xlua.structclone` 等兼容 API；Lua table 作为方法参数时会按 `Cast<T>` 规则转换为 class/struct/interface。
+- 未生成 delegate 时，`Get<TDelegate>` 会抛异常；接口有 `DispatchProxy` 兜底；未生成的事件才用表达式树现场生成。
+- 生成器会输出 `link.xml` 保留配置类型，供 Unity IL2CPP 裁剪使用；`scripts/trim-check.ps1` 提供 `PublishTrimmed` 烟测，NativeAOT 与 IL2CPP 真机验证仍未覆盖。
 - 不含热补丁、Unity 适配与资源版本管理。
 
 ## 文档

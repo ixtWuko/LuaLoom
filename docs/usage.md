@@ -90,7 +90,7 @@ print(p:Triple(2))              -- 扩展方法
 print(CS.MyGame.Player.Double(4)) -- 静态方法
 ```
 
-反射兜底覆盖成员访问、操作符、索引器、事件、泛型方法与 `out`/`ref`/`params`：
+以下能力优先走生成绑定，未配置或不支持时才回落到反射；覆盖成员访问、操作符、索引器、事件、泛型方法与 `out`/`ref`/`params`：
 
 ```lua
 local c = a + b                 -- op_Addition
@@ -108,9 +108,9 @@ local max = uint64.parse('18446744073709551615')      -- 无符号 64 位
 local box = xlua.get_generic_method(CS.MyGame.Utils, 'Convert')
 ```
 
-生成绑定覆盖热点成员、单方法的 `ref`/`out`/`params`、默认值参数以及受支持元素类型的一维数组；未生成的成员（包括事件、未配置基类、复杂重载组、类元素数组）会自动回落到反射。绑定自己返回 `nil` 的成员不会被误判为「未处理」。派生类只生成自身成员；基类也需要加入 `luaCallCSharp` 才会生成继承成员。非字符串键索引器由生成绑定优先处理。扩展方法所在的静态类需要加入 `luaCallCSharp`，生成的注册代码会调用 `RegisterExtensionType`；未配置的扩展方法不可见。
+生成绑定覆盖热点成员、`ref`/`out`/`params`、默认值参数及其混合重载组、一维/矩形数组（含类元素）、事件、操作符、接口事件与无约束泛型方法；`genericMethods` 可显式生成闭合泛型方法，`Cast<T>`、`BlackList`、`DoNotGen`、`ReflectionUse`、`GCOptimize` 也已接入配置。未生成的成员（未配置基类、未列出的泛型实例、带约束的泛型接口方法等）会自动回落到反射。绑定自己返回 `nil` 的成员不会被误判为「未处理」。派生类只生成自身成员；直接基类也需要加入 `luaCallCSharp` 才会生成继承成员。非字符串键索引器由生成绑定优先处理。扩展方法所在的静态类需要加入 `luaCallCSharp`，生成的注册代码会调用 `RegisterExtensionType`；未配置的扩展方法不可见。需要验证生成覆盖时开启 `StrictReflection = true`，再用 `lua-loom-gen generate --coverage` 查看未生成原因。
 
-同名重载由反射按参数类型评分：精确类型优先，其次可转换类型；生成器对常见类型（字符串、布尔、整数、数值、userdata、`object`）生成类型条件分派，单方法默认值参数按实参个数补齐，未覆盖的组合回退反射。
+同名重载由反射按参数类型评分：精确类型优先，其次可转换类型；生成器对常见类型（字符串、布尔、整数、数值、userdata、`object`）生成类型条件分派，默认值参数按实参个数补齐，复杂参数组也走同一套动态 arity 分派；只有未配置或生成器不支持的类型才回退反射。
 
 ## 5. delegate 与 interface
 
@@ -120,7 +120,7 @@ C# 侧把 Lua 函数当 delegate 用，需要在生成配置的 `csharpCallLua` 
 var callback = env.Global.Get<IntCallback>("callback");
 ```
 
-接口同理，生成实现优先；未生成时用 `DispatchProxy` 兜底（`EnableReflectionFallback = true`）。
+接口同理，生成实现优先；未生成时用 `DispatchProxy` 兜底（`EnableReflectionFallback = true`）。接口含事件时生成实现会转发 `add_<Event>`/`remove_<Event>`，含无约束泛型方法时按方法名转发；`StrictReflection = true` 时不再使用代理兜底。
 
 ## 6. 协程
 
