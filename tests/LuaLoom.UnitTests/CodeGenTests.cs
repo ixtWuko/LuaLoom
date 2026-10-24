@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Runtime.Loader;
 using LuaLoom;
 using LuaLoom.CodeGen;
 using LuaLoom.Native;
@@ -28,12 +30,18 @@ public sealed class CodeGenTests
             "LuaLoom.UnitTests.Sample.PointMath",
             "LuaLoom.UnitTests.Sample.Emitter",
             "LuaLoom.UnitTests.Sample.DecimalMethods",
+            "LuaLoom.UnitTests.Sample.ComplexOverloads",
+            "LuaLoom.UnitTests.Sample.DelegateFactory",
+            "LuaLoom.UnitTests.Sample.InteropHost",
         ],
         CSharpCallLua =
         [
             "LuaLoom.UnitTests.Sample.IntOp",
             "LuaLoom.UnitTests.Sample.ICalculator",
             "LuaLoom.UnitTests.Sample.IArrayCalculator",
+            "LuaLoom.UnitTests.Sample.IGenericCalculator",
+            "LuaLoom.UnitTests.Sample.IEventSource",
+            "LuaLoom.UnitTests.Sample.IntUnary",
             "LuaLoom.UnitTests.Sample.ParseOp",
             "LuaLoom.UnitTests.Sample.ParamsOp",
             "LuaLoom.UnitTests.Sample.ArrayOp",
@@ -60,12 +68,15 @@ public sealed class CodeGenTests
         Assert.Contains("LuaLoom_UnitTests_Sample_PointMathBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_EmitterBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_DecimalMethodsBinder.g.cs", names);
+        Assert.Contains("LuaLoom_UnitTests_Sample_ComplexOverloadsBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_IntOpInvoker.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_ParseOpInvoker.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_ParamsOpInvoker.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_ArrayOpInvoker.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_ICalculatorImpl.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_IArrayCalculatorImpl.g.cs", names);
+        Assert.Contains("LuaLoom_UnitTests_Sample_IGenericCalculatorImpl.g.cs", names);
+        Assert.Contains("LuaLoom_UnitTests_Sample_IEventSourceImpl.g.cs", names);
         Assert.Contains("System_Action_int_Invoker.g.cs", names);
         Assert.Contains(
             names,
@@ -90,6 +101,14 @@ public sealed class CodeGenTests
             "PlayerExtensionsBinder.RegisterExtensions(env)",
             bindings.Content,
             StringComparison.Ordinal);
+
+        var genericInterface = result.Files.Single(
+            static f => f.FileName == "LuaLoom_UnitTests_Sample_IGenericCalculatorImpl.g.cs");
+        Assert.Contains("T Echo<T>", genericInterface.Content, StringComparison.Ordinal);
+
+        var eventInterface = result.Files.Single(
+            static f => f.FileName == "LuaLoom_UnitTests_Sample_IEventSourceImpl.g.cs");
+        Assert.Contains("add => CallEvent(\"add_Changed\", value)", eventInterface.Content, StringComparison.Ordinal);
 
         var bag = result.Files.Single(static f => f.FileName == "LuaLoom_UnitTests_Sample_BagBinder.g.cs");
         Assert.Contains("InstanceIndexer = IndexerGet", bag.Content, StringComparison.Ordinal);
@@ -217,39 +236,69 @@ public sealed class CodeGenTests
         var result = CodeGenerator.Generate(CreateConfig(typeof(Player).Assembly.Location), AppContext.BaseDirectory);
         Assert.Empty(result.Diagnostics);
 
-        var references = new List<MetadataReference>();
-        foreach (var file in Directory.GetFiles(System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory(), "*.dll"))
-        {
-            try
-            {
-                _ = System.Reflection.AssemblyName.GetAssemblyName(file);
-                references.Add(MetadataReference.CreateFromFile(file));
-            }
-            catch (BadImageFormatException)
-            {
-                // 原生库没有托管元数据，跳过
-            }
-        }
-
-        references.Add(MetadataReference.CreateFromFile(typeof(Player).Assembly.Location));
-        references.Add(MetadataReference.CreateFromFile(typeof(LuaEnv).Assembly.Location));
-        references.Add(MetadataReference.CreateFromFile(typeof(LuaCSFunction).Assembly.Location));
-
-        var compilation = CSharpCompilation.Create(
-            "LuaLoom.Generated.Tests",
-            result.Files.Where(static file => file.IsCode)
-                .Select(static file => CSharpSyntaxTree.ParseText(file.Content)),
-            references,
-            new CSharpCompilationOptions(
-                OutputKind.DynamicallyLinkedLibrary,
-                nullableContextOptions: NullableContextOptions.Enable));
-
+        var compilation = CreateCompilation(result, "LuaLoom.Generated.Tests");
         using var stream = new MemoryStream();
         var emit = compilation.Emit(stream);
 
         Assert.True(
             emit.Success,
             string.Join(Environment.NewLine, emit.Diagnostics.Where(static d => d.Severity == DiagnosticSeverity.Error)));
+    }
+
+    [Fact]
+    public void GeneratedBindings_WorkUnderStrictReflection()
+    {
+        var result = CodeGenerator.Generate(CreateConfig(typeof(Player).Assembly.Location), AppContext.BaseDirectory);
+        Assert.Empty(result.Diagnostics);
+
+        var compilation = CreateCompilation(result, "LuaLoom.Generated.Strict.Tests");
+        using var stream = new MemoryStream();
+        var emit = compilation.Emit(stream);
+        Assert.True(
+            emit.Success,
+            string.Join(Environment.NewLine, emit.Diagnostics.Where(static d => d.Severity == DiagnosticSeverity.Error)));
+
+        stream.Position = 0;
+        var assembly = AssemblyLoadContext.Default.LoadFromStream(stream);
+        var register = assembly
+            .GetType("LuaLoom.Generated.LuaBindings", throwOnError: true)!
+            .GetMethod("Register", BindingFlags.Public | BindingFlags.Static)
+            ?? throw new InvalidOperationException("LuaBindings.Register was not generated.");
+
+        using var env = new LuaEnv(new LuaEnvOptions { StrictReflection = true });
+        register.Invoke(null, [env]);
+
+        var results = env.DoString("""
+            local p = CS.LuaLoom.UnitTests.Sample.Player(3)
+            p.Hp = 4
+            p.Name = 'strict'
+            local c = CS.LuaLoom.UnitTests.Sample.ComplexOverloads()
+            local outValue, outExtra = c:OutGroup(2)
+            local f = CS.LuaLoom.UnitTests.Sample.DelegateFactory.Make(3)
+            local generic = { Echo = function(self, value) return value + 1 end }
+            local events = { add_Changed = function(self, handler) self.seen = handler(7) end }
+            CS.LuaLoom.UnitTests.Sample.InteropHost.Subscribe(events, function(value) return value * 2 end)
+            return p.Hp, p.Name, p:Add(2, 3), p:Add(5),
+                   CS.LuaLoom.UnitTests.Sample.Player.Double(6),
+                   c:Combo(1), c:Combo(1, 2), c:Combo(1, 'x'),
+                   outValue, outExtra, c:RefGroup(2, 3),
+                   f(4), CS.LuaLoom.UnitTests.Sample.InteropHost.Use(generic), events.seen
+            """);
+
+        Assert.Equal(4L, results[0]);
+        Assert.Equal("strict", results[1]);
+        Assert.Equal(5L, results[2]);
+        Assert.Equal(9L, results[3]);
+        Assert.Equal(12L, results[4]);
+        Assert.Equal("int", results[5]);
+        Assert.Equal("optional", results[6]);
+        Assert.Equal("params", results[7]);
+        Assert.Equal(3L, results[8]);
+        Assert.Equal(3L, results[9]);
+        Assert.Equal(5L, results[10]);
+        Assert.Equal(12L, results[11]);
+        Assert.Equal(6L, results[12]);
+        Assert.Equal(14L, results[13]);
     }
 
     [Fact]
@@ -364,6 +413,77 @@ public sealed class CodeGenTests
     }
 
     [Fact]
+    public void StrictReflection_BindingMissThrows()
+    {
+        using var env = new LuaEnv(new LuaEnvOptions { StrictReflection = true });
+        env.RegisterType(new LuaTypeBinding
+        {
+            Type = typeof(Player),
+            FullName = "LuaLoom.UnitTests.Sample.Player",
+            Call = NewPlayerHandler,
+            InstanceIndex = PlayerIndexHandler,
+        });
+
+        var exception = Assert.Throws<LuaException>(
+            () => env.DoString("local p = CS.LuaLoom.UnitTests.Sample.Player(1); return p.Name"));
+
+        Assert.Contains("Strict reflection mode blocked", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Player.Name", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StrictReflection_AllowsGeneratedPath()
+    {
+        using var env = new LuaEnv(new LuaEnvOptions { StrictReflection = true });
+        env.RegisterType(new LuaTypeBinding
+        {
+            Type = typeof(Player),
+            FullName = "LuaLoom.UnitTests.Sample.Player",
+            Call = NewPlayerHandler,
+            InstanceIndex = PlayerIndexHandler,
+            StaticIndex = StaticCountNinetyNine,
+        });
+
+        var results = env.DoString("""
+            local p = CS.LuaLoom.UnitTests.Sample.Player(3)
+            return p.Hp, CS.LuaLoom.UnitTests.Sample.Player.Count
+            """);
+
+        Assert.Equal(3L, results[0]);
+        Assert.Equal(99L, results[1]);
+    }
+
+    [Fact]
+    public void StrictReflection_ReflectionOperatorThrows()
+    {
+        using var env = new LuaEnv(new LuaEnvOptions { StrictReflection = true });
+        env.RegisterType(new LuaTypeBinding
+        {
+            Type = typeof(Player),
+            FullName = "LuaLoom.UnitTests.Sample.Player",
+            Call = NewPlayerHandler,
+        });
+
+        var exception = Assert.Throws<LuaException>(
+            () => env.DoString("local p = CS.LuaLoom.UnitTests.Sample.Player(1); return p + p"));
+
+        Assert.Contains("Strict reflection mode blocked", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("op_Addition", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StrictReflection_GenericInvokeThrows()
+    {
+        using var env = new LuaEnv(new LuaEnvOptions { StrictReflection = true });
+
+        var exception = Assert.Throws<LuaException>(
+            () => env.DoString(
+                "return lua_loom_generic('LuaLoom.UnitTests.Sample.Player', 'Missing', 'System.Int32')"));
+
+        Assert.Contains("generic method reflection", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Binding_HandledNilDoesNotFallBack()
     {
         using var env = new LuaEnv();
@@ -383,6 +503,38 @@ public sealed class CodeGenTests
 
         Assert.Single(results);
         Assert.Null(results[0]);
+    }
+
+    private static CSharpCompilation CreateCompilation(GenerationResult result, string assemblyName)
+    {
+        var references = new List<MetadataReference>();
+        foreach (var file in Directory.GetFiles(
+            System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory(),
+            "*.dll"))
+        {
+            try
+            {
+                _ = AssemblyName.GetAssemblyName(file);
+                references.Add(MetadataReference.CreateFromFile(file));
+            }
+            catch (BadImageFormatException)
+            {
+                // 原生库没有托管元数据，跳过
+            }
+        }
+
+        references.Add(MetadataReference.CreateFromFile(typeof(Player).Assembly.Location));
+        references.Add(MetadataReference.CreateFromFile(typeof(LuaEnv).Assembly.Location));
+        references.Add(MetadataReference.CreateFromFile(typeof(LuaCSFunction).Assembly.Location));
+
+        return CSharpCompilation.Create(
+            assemblyName,
+            result.Files.Where(static file => file.IsCode)
+                .Select(static file => CSharpSyntaxTree.ParseText(file.Content)),
+            references,
+            new CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary,
+                nullableContextOptions: NullableContextOptions.Enable));
     }
 
     private static readonly LuaCSFunction EmptyIndexHandler = EmptyIndex;

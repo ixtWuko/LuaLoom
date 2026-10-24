@@ -57,6 +57,31 @@ public sealed class Calculator : ICalculator
     public int Value { get; set; }
 }
 
+public sealed class ComplexOverloads
+{
+    public string Combo(int value) => "int";
+
+    public string Combo(int value, int add = 1) => "optional";
+
+    public string Combo(int value, params string[] rest) => "params";
+
+    public int OutGroup(int value, out int extra)
+    {
+        extra = value + 1;
+        return extra;
+    }
+
+    public int OutGroup(string value, out int extra)
+    {
+        extra = value.Length;
+        return extra;
+    }
+
+    public int RefGroup(int value, ref int extra) => value + extra;
+
+    public int RefGroup(int value, int extra) => value + extra;
+}
+
 public interface IArrayCalculator
 {
     int Sum(int[] values);
@@ -64,6 +89,30 @@ public interface IArrayCalculator
     string Join(string separator, params object[] items);
 
     bool TryParse(string text, out int value);
+}
+
+public interface IGenericCalculator
+{
+    T Echo<T>(T value);
+}
+
+public delegate int IntUnary(int value);
+
+public interface IEventSource
+{
+    event IntUnary? Changed;
+}
+
+public sealed class DelegateFactory
+{
+    public static IntUnary Make(int factor) => value => value * factor;
+}
+
+public static class InteropHost
+{
+    public static int Use(IGenericCalculator calculator) => calculator.Echo(5);
+
+    public static void Subscribe(IEventSource source, IntUnary handler) => source.Changed += handler;
 }
 
 public delegate int IntOp(int a, int b);

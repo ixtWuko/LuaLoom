@@ -10,6 +10,7 @@
 - CI 执行 `lua-loom-gen check`，确认仓库里的生成物与重新生成的结果一致。
 - 运行期启动时，消费方调用 `LuaBindings.Register(env)`，把生成的类型绑定与 invoker 注册进当前环境。
 - `csharpCallLua` 可以直接写闭合泛型 delegate（`System.Action<int>`、`System.Func<int, string>`、自定义 `Mapper<int, string>`），生成对应 invoker。
+- `csharpCallLua` 中的接口可含事件与无约束泛型方法；生成实现类通过 Lua 表的 `add_<Event>`/`remove_<Event>` 与方法名转发。
 
 **边界**
 
@@ -107,8 +108,8 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 
 1. 读取配置，校验字段完整性；相对路径以配置文件所在目录为基准解析。
 2. `MetadataLoadContext` 加载目标程序集及其依赖，解析每个类型全名；缺失则记 `LL0001`。`csharpCallLua` 支持 `Name<Arg1, Arg2>`：先查目标程序集、核心程序集与已加载程序集，再递归解析泛型参数并 `MakeGenericType`；基本类型别名映射到 CLR 类型。
-3. 遍历类型成员：跳过非公共成员、`obsolete` 成员，以及生成器不支持的类型（普通数组、泛型类型等）；被跳过的成员由 M004 的反射回落接管，不记错误。基类成员只有在直接基类也列入 `luaCallCSharp` 时才纳入。
-4. 对 delegate/interface 生成 invoker 或实现类；配置中的静态扩展类额外生成 `RegisterExtensionType` 与 `RegisterExtensions` 分派表；类型绑定包含非字符串键索引器、操作符与事件订阅 thunk。同参数个数的方法重载按 Lua 类型条件分派（字符串、布尔、整数、数值、userdata 等），无法覆盖的组合仍回退反射；单方法默认值参数按实参个数生成多个分支并补齐缺省值；单方法 `ref`/`out`/`params` 生成参数装配与多返回值；一维数组通过 `LuaBinding.ReadArray<T>` / `PushArray<T>` 编解码。闭合泛型 delegate 的 `TypeRef` 递归输出 `global::Namespace.Type<...>`，文件名用 `TypeRef` 做字符白名单替换，避免写入尖括号、逗号与程序集限定名。
+3. 遍历类型成员：跳过非公共成员、`obsolete` 成员，以及生成器不支持的类型（多维数组、开放泛型等）；被跳过的成员由 M004 的反射回落接管，不记错误。基类成员只有在直接基类也列入 `luaCallCSharp` 时才纳入。
+4. 对 delegate/interface 生成 invoker 或实现类；配置中的静态扩展类额外生成 `RegisterExtensionType` 与 `RegisterExtensions` 分派表；类型绑定包含非字符串键索引器、操作符与事件订阅 thunk。方法组按实参个数与 Lua 类型条件分派（字符串、布尔、整数、数值、userdata 等）；复杂重载组（`ref`/`out`/`params`/默认值混合）也用统一的动态 arity 分派，`out` 不消耗实参，`params` 吞掉剩余实参，缺省值按实参个数补齐；一维数组通过 `LuaBinding.ReadArray<T>` / `PushArray<T>` 编解码。接口实现支持事件（转发 `add_<Event>`/`remove_<Event>`）和无约束泛型方法（方法名查表、`T` 走 `ConvertObject<T>`）；带约束的泛型接口方法与默认接口实现仍不生成。闭合泛型 delegate 的 `TypeRef` 递归输出 `global::Namespace.Type<...>`，文件名用 `TypeRef` 做字符白名单替换，避免写入尖括号、逗号与程序集限定名。
 5. 用 `CSharpSyntaxTree.ParseText` 做语法校验；真正的编译校验放在测试里，用 `CSharpCompilation` 对产物做一次 Emit。
 6. 通过后按文件名 `Ordinal` 排序写文件，UTF-8 无 BOM，换行 `\n`。
 7. 按配置类型生成 `link.xml`，避免 Unity IL2CPP 裁剪反射/生成所需元数据；XML 文件跳过 C# 语法校验。
@@ -129,17 +130,16 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 
 | 支持 | 不支持 |
 | :-- | :-- |
-| public 构造函数（按参数个数分派） | 泛型类型、泛型方法、嵌套类型 |
+| public 构造函数（按参数个数分派） | 泛型类型、嵌套类型 |
 | 实例/静态字段与属性（可读可写） | — |
 | 事件生成（订阅/退订 thunk） | 复杂事件委托、未配置类型（回退反射） |
 | 操作符生成（`+ - * / %`、一元 `-`、`==`、`<`、`<=`） | 其它操作符 |
 | 实例索引器（非字符串键） | 字符串键索引器、静态索引器 |
 | 已配置基类的继承成员 | 未配置基类的成员 |
-| 实例/静态方法（含同参数个数重载，按 Lua 类型分派） | 扩展方法（运行期回落反射） |
-| 单方法 `ref`/`out`/`params` | 与其他重载混合的复杂参数组 |
-| 单方法默认值参数（按缺省值补齐） | 默认值与同参数个数重载混合的组 |
+| 实例/静态方法（含同参数个数重载，按 Lua 类型分派） | 泛型方法生成（运行期 `lua_loom_generic`） |
+| `ref`/`out`/`params`、默认值及其与重载混合的组 | 带约束的泛型参数 |
 | 非泛型与闭合泛型 delegate（含 `params`/`ref`/`out`/数组） | 开放泛型 delegate |
-| interface 的方法与属性（含 `params`/`ref`/`out`/数组与闭合泛型接口） | 接口事件、默认实现、显式接口实现 |
+| interface 的方法、属性、事件与无约束泛型方法（含 `params`/`ref`/`out`/数组与闭合泛型接口） | 默认接口实现、显式接口实现、带约束的泛型方法 |
 | 扩展方法类（列入 `luaCallCSharp`，生成注册与分派表） | 未配置的扩展方法不扫描、不可见 |
 | 一维数组参数/返回值（基本类型、字符串、枚举、`object`） | 多维数组、类元素数组 |
 | `decimal` 参数/返回值（struct userdata） | 反射路径的 decimal 自动识别 |
@@ -162,7 +162,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | `csharpCallLua` 含自定义 `Mapper<int, string>` | `generate` + 编译 | 目标程序集开放泛型闭合正确 |
 | 配置 ``System.Action`1`` 或 `System.Action<>` | `generate` | 诊断 `LL0003` |
 | 检查泛型产物文件名 | 文本检查 | 仅字母数字与下划线 |
-| 同一方法存在两个同参数个数重载 | `generate` | 整个方法组不生成，运行时走反射评分 |
+| 同一方法存在两个同参数个数重载 | `generate` | 生成类型条件分派，编译通过 |
 | 类型含 `[Obsolete]` 方法/字段 | `generate` | 产物不含该成员 |
 | 类型含同参数个数重载 | `generate` | 产物包含类型条件分派，编译通过 |
 | 单方法带默认值参数 | `generate` | 产物按实参个数生成分支，编译通过 |
@@ -173,7 +173,9 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 配置扩展类 | `generate` | 产物包含 `RegisterExtensions` 与 `RegisterExtensionMethod` 调用 |
 | 配置类型 | `generate` | 产物包含 `link.xml`，按程序集列出保留类型 |
 | 接口含 `params`/`ref`/`out`/数组 | `generate` + 编译 | 产物实现对应签名并通过 Emit |
+| 接口含事件与无约束泛型方法 | `generate` + 编译 | 产物含事件访问器与泛型方法，Emit 成功 |
 | delegate 含 `params`/`ref`/`out`/数组 | `generate` + 编译 | 产物包含对应 lambda 与转换，Emit 成功 |
+| 生成绑定 + `StrictReflection = true` | 运行时执行生成成员 | 正常返回，无反射兜底 |
 | 派生类 + 已配置基类 | `generate` | 派生类绑定包含基类字段/属性/方法 |
 | 派生类单独配置 | `generate` | 不生成未配置基类成员 |
 | 类型含 `this[int]` | `generate` | 绑定含 `InstanceIndexer`/`InstanceIndexerSet` |

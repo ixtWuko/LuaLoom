@@ -17,6 +17,13 @@ public sealed record LuaEnvOptions
     /// <summary>未生成绑定的类型是否走反射兜底（M004 使用）。</summary>
     public bool EnableReflectionFallback { get; init; } = true;
 
+    /// <summary>
+    /// 是否禁止隐式反射兜底。开启后，未注册类型、绑定未命中的成员、反射版事件/操作符/索引器/
+    /// 泛型调用和反射扩展方法都会抛出错误；<c>typeof</c>、<c>cast</c>、<c>xlua.private_accessible</c>
+    /// 等显式反射 API 不受影响。用于验证生成覆盖是否完整。
+    /// </summary>
+    public bool StrictReflection { get; init; }
+
     /// <summary>是否检查线程归属；关闭后不保证线程安全。</summary>
     public bool CheckThreadAffinity { get; init; } = true;
 }

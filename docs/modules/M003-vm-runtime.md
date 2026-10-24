@@ -69,6 +69,7 @@ public sealed record LuaEnvOptions
     public Action<LogLevel, string>? Logger { get; init; }
     public string[] SearchPaths { get; init; } = ["?.lua"];
     public bool EnableReflectionFallback { get; init; } = true;
+    public bool StrictReflection { get; init; }
     public bool CheckThreadAffinity { get; init; } = true;
 }
 

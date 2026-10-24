@@ -68,6 +68,7 @@ internal static class Interop
     ];
 
     private static readonly LuaCSFunction OperatorCallback = OnOperator;
+    private static readonly LuaCSFunction DelegateCallCallback = OnDelegateCall;
     private static readonly LuaCSFunction EventCallback = OnEvent;
     private static readonly IntPtr EventPointer = NativeMarshal.GetFunctionPointerForDelegate(EventCallback);
 
@@ -123,6 +124,7 @@ internal static class Interop
         Environments[environment.Handle] = environment;
         environment.Marshal.SetObjectHandlers(InstanceIndexCallback, InstanceNewIndexCallback);
 
+        environment.Marshal.SetObjectMetamethod("__call", DelegateCallCallback);
         foreach (var (luaName, methodName) in Operators)
         {
             environment.Marshal.SetObjectMetamethod(luaName, OperatorCallback, methodName);
@@ -175,10 +177,10 @@ internal static class Interop
                 return factory(table);
             }
 
-            if (!environment.Options.EnableReflectionFallback)
+            if (environment.Options.StrictReflection || !environment.Options.EnableReflectionFallback)
             {
                 throw new LuaConversionException(
-                    $"{type.Name} (register the interface binding or enable EnableReflectionFallback)",
+                    $"{type.Name} (register the interface binding or disable StrictReflection / enable EnableReflectionFallback)",
                     DescribeLuaType(state, index),
                     index);
             }
@@ -357,10 +359,10 @@ internal static class Interop
             return 1;
         }
 
-        if (!hasBinding && !environment.Options.EnableReflectionFallback)
+        if (!hasBinding && (environment.Options.StrictReflection || !environment.Options.EnableReflectionFallback))
         {
             throw new InvalidOperationException(
-                $"Type '{fullName}' is not registered. Add it to luaCallCSharp or enable EnableReflectionFallback.");
+                $"Type '{fullName}' is not registered. Add it to luaCallCSharp, or disable StrictReflection / enable EnableReflectionFallback.");
         }
 
         CreateClassTable(s, fullName);
@@ -380,6 +382,11 @@ internal static class Interop
             {
                 return results;
             }
+        }
+
+        if (environment.Options.StrictReflection)
+        {
+            ThrowStrict(environment, hasBinding ? binding.Type : null, $"constructor '{fullName}'");
         }
 
         var type = hasBinding ? binding.Type : ResolveType(fullName);
@@ -417,6 +424,7 @@ internal static class Interop
 
         var type = ResolveType(fullName) ?? throw new InvalidOperationException("Type not found.");
         var name = ReadString(s, 2);
+        ThrowStrict(environment, type, $"static member '{type.Name}.{name}'");
 
         var flags = MemberFlags(environment, type, isStatic: true);
         var property = type.GetProperty(name, flags);
@@ -465,6 +473,7 @@ internal static class Interop
 
         var type = ResolveType(fullName) ?? throw new InvalidOperationException("Type not found.");
         var name = ReadString(s, 2);
+        ThrowStrict(environment, type, $"static member '{type.Name}.{name}'");
         var value = environment.Marshal.ReadObject(3);
 
         var flags = MemberFlags(environment, type, isStatic: true);
@@ -500,6 +509,7 @@ internal static class Interop
                 }
             }
 
+            ThrowStrict(environment, instance.GetType(), "indexer read");
             return ReadIndexer(environment, s, instance);
         }
 
@@ -515,6 +525,20 @@ internal static class Interop
 
         var name = ReadString(s, 2);
         var type = instance.GetType();
+
+        if (environment.Options.StrictReflection)
+        {
+            if (environment.TryGetExtensionMethod(type, name, out var strictExtension))
+            {
+                LuaApi.lua_pushcclosure(
+                    s,
+                    NativeMarshal.GetFunctionPointerForDelegate(strictExtension),
+                    0);
+                return 1;
+            }
+
+            ThrowStrict(environment, type, $"member '{type.Name}.{name}'");
+        }
 
         var flags = MemberFlags(environment, type, isStatic: false);
         var property = type.GetProperty(name, flags);
@@ -590,6 +614,7 @@ internal static class Interop
                 LuaApi.lua_settop(s, top);
             }
 
+            ThrowStrict(environment, instance.GetType(), "indexer write");
             return WriteIndexer(environment, s, instance);
         }
 
@@ -606,6 +631,7 @@ internal static class Interop
         }
 
         var name = ReadString(s, 2);
+        ThrowStrict(environment, instance.GetType(), $"member '{instance.GetType().Name}.{name}'");
         var value = environment.Marshal.ReadObject(3);
         var type = instance.GetType();
 
@@ -627,6 +653,7 @@ internal static class Interop
     {
         var environment = GetEnvironment(s);
         var type = ResolveType(GetUpvalueString(s, 1)) ?? throw new InvalidOperationException("Type not found.");
+        ThrowStrict(environment, type, "static method reflection dispatch");
         var name = GetUpvalueString(s, 2);
         var values = ReadArguments(environment, s, 1, LuaApi.lua_gettop(s));
 
@@ -651,6 +678,7 @@ internal static class Interop
         var environment = GetEnvironment(s);
         var instance = environment.Marshal.GetObjectFromUserdata(1)
             ?? throw new InvalidOperationException("Lua value is not a C# object.");
+        ThrowStrict(environment, instance.GetType(), "instance method reflection dispatch");
         var name = GetUpvalueString(s, 1);
         var values = ReadArguments(environment, s, 2, LuaApi.lua_gettop(s));
 
@@ -668,6 +696,36 @@ internal static class Interop
 
         var result = Invoke(method, instance, args);
         return PushReturnAndByRefResults(environment, method, result, args);
+    });
+
+    private static int OnDelegateCall(IntPtr state) => Guarded(state, static s =>
+    {
+        var environment = GetEnvironment(s);
+        var value = environment.Marshal.GetObjectFromUserdata(1);
+        if (value is not Delegate callback)
+        {
+            throw new InvalidOperationException("Only C# delegate objects can be called from Lua.");
+        }
+
+        var values = ReadArguments(environment, s, 2, LuaApi.lua_gettop(s));
+        var method = callback.Method;
+        if (!TryBindArguments(values, method.GetParameters(), out var arguments, out _))
+        {
+            throw new ArgumentException(
+                $"No matching arguments for delegate '{callback.GetType().Name}'.");
+        }
+
+        object? result;
+        try
+        {
+            result = callback.DynamicInvoke(arguments);
+        }
+        catch (TargetInvocationException exception) when (exception.InnerException is not null)
+        {
+            throw exception.InnerException;
+        }
+
+        return PushReturnAndByRefResults(environment, method, result, arguments);
     });
 
     private static int OnOperator(IntPtr state) => Guarded(state, static s =>
@@ -697,6 +755,7 @@ internal static class Interop
             return generated(s);
         }
 
+        ThrowStrict(environment, left.GetType(), $"operator '{methodName}'");
         var type = left.GetType();
         var isUnary = methodName == "op_UnaryNegation";
         var parameterCount = isUnary ? 1 : argumentCount;
@@ -816,6 +875,7 @@ internal static class Interop
         var name = GetUpvalueString(s, 1);
         var instance = environment.Marshal.GetObjectFromUserdata(1)
             ?? throw new InvalidOperationException("Lua value is not a C# object.");
+        ThrowStrict(environment, instance.GetType(), $"event '{instance.GetType().Name}.{name}'");
         var operation = ReadString(s, 2);
         var eventInfo = instance.GetType().GetEvent(
                 name,
@@ -869,6 +929,8 @@ internal static class Interop
 
     private static int OnGenericFactory(IntPtr state) => Guarded(state, static s =>
     {
+        var environment = GetEnvironment(s);
+        ThrowStrict(environment, null, "generic method reflection");
         var typeName = ReadTypeName(s, 1);
         var methodName = ReadString(s, 2);
         var count = LuaApi.lua_gettop(s) - 2;
@@ -1404,6 +1466,18 @@ internal static class Interop
         }
 
         return Convert.ChangeType(value, underlying, CultureInfo.InvariantCulture);
+    }
+
+    private static void ThrowStrict(LuaEnv environment, Type? type, string operation)
+    {
+        if (!environment.Options.StrictReflection)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Strict reflection mode blocked {operation} on '{type?.FullName ?? "unknown type"}'. "
+            + "Generate and register the binding, or disable StrictReflection.");
     }
 
     private static BindingFlags MemberFlags(LuaEnv environment, Type type, bool isStatic)

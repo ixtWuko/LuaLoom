@@ -20,6 +20,7 @@ var sum = env.DoString("return 1 + 1")[0];
 | `LibraryLoader` | `NativeLibraryLoader` | 原生库加载器 |
 | `Logger` | 无 | `LogLevel` + 消息 |
 | `EnableReflectionFallback` | `true` | 未注册类型是否走反射 |
+| `StrictReflection` | `false` | 禁止隐式反射兜底；用于验证生成覆盖 |
 | `CheckThreadAffinity` | `true` | 是否校验调用线程 |
 
 ## 2. 执行脚本与加载器

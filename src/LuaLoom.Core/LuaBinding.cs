@@ -88,6 +88,12 @@ public static class LuaBinding
 
     public static T ReadObjectAs<T>(IntPtr state, int index)
     {
+        var bridged = LuaMarshal.BridgeReader?.Invoke(state, typeof(T), index);
+        if (bridged is T bridgedValue)
+        {
+            return bridgedValue;
+        }
+
         var value = LuaMarshalRegistry.Get(state).ReadObject(index);
         if (value is T typed)
         {
