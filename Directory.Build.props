@@ -8,6 +8,7 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <ArtifactsPath>$(MSBuildThisFileDirectory)artifacts</ArtifactsPath>
     <Version>0.1.0</Version>
+    <LuaVersion Condition="'$(LuaVersion)' == ''">54</LuaVersion>
   </PropertyGroup>
 
 </Project>

@@ -3,11 +3,15 @@ using System.Runtime.InteropServices;
 namespace LuaLoom.Native;
 
 /// <summary>
-/// Lua 5.4 C API 的一对一映射。全部栈操作只能在这里与 M002 的 marshal 层出现。
+/// Lua C API 的一对一映射。全部栈操作只能在这里与 marshal 层出现。
 /// </summary>
 internal static class LuaApi
 {
-    internal const string Library = "lua54";
+    internal const string Library = "lualoom";
+
+    /// <summary>构建时选定的版本画像；版本差异只在 profile 内处理。</summary>
+    internal static readonly LuaRuntimeProfile Profile =
+        LuaRuntimeProfile.Select(LuaRuntimeProfile.ReadFromAssembly());
 
     // lua.h 常量
     internal const int LuaOk = 0;
@@ -17,7 +21,6 @@ internal static class LuaApi
     internal const int LuaErrMem = 4;
     internal const int LuaErrErr = 5;
     internal const int LuaMultRet = -1;
-    internal const int LuaRegistryIndex = -1001000;
 
     // lua.h 类型
     internal const int LuaTNil = 0;
@@ -98,9 +101,6 @@ internal static class LuaApi
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr lua_touserdata(IntPtr L, int index);
-
-    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern IntPtr lua_newuserdatauv(IntPtr L, nuint size, int userValues);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void lua_createtable(IntPtr L, int arraySize, int recordSize);
@@ -188,9 +188,6 @@ internal static class LuaApi
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void lua_xmove(IntPtr from, IntPtr to, int count);
-
-    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int lua_resume(IntPtr L, IntPtr from, int argumentCount, out int resultCount);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr lua_topointer(IntPtr L, int index);

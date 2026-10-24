@@ -10,7 +10,7 @@ using var env = new LuaEnv();
 var sum = env.DoString("return 1 + 1")[0];
 ```
 
-`LuaEnv` 对应一个 Lua 5.4 虚拟机，建议全局一个实例。`Dispose` 关闭虚拟机，之后所有调用抛 `ObjectDisposedException`。
+`LuaEnv` 对应一个 Lua 虚拟机（版本由构建决定），建议全局一个实例。`Dispose` 关闭虚拟机，之后所有调用抛 `ObjectDisposedException`。
 
 选项：
 

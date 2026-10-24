@@ -16,7 +16,7 @@ internal static class StructCodec
         }
 
         var size = (nuint)Unsafe.SizeOf<T>();
-        var pointer = LuaApi.lua_newuserdatauv(state, size, 0);
+        var pointer = LuaApi.Profile.NewUserdata(state, size);
         unsafe
         {
             Unsafe.Write(pointer.ToPointer(), value);

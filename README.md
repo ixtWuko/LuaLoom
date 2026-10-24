@@ -1,11 +1,12 @@
 # LuaLoom
 
-在 .NET 中嵌入 Lua 5.4，让 C# 与 Lua 双向调用。
+在 .NET 中嵌入 Lua 5.3 / 5.4，让 C# 与 Lua 双向调用。
 
 LuaLoom 的核心不依赖 Unity：虚拟机封装、类型编解码、绑定生成各自成层，宿主差异通过接口注入。对外 API 借鉴 [xLua](https://github.com/Tencent/xLua) 的使用习惯，已有 xLua 经验的团队迁移成本较低。
 
 ## 特性
 
+- **多版本构建**：同一套源码在构建时选择 Lua 5.3.6 或 5.4.9，5.5 预留画像。
 - **双向调用**：Lua 通过 `CS.*` 构造对象、访问成员；C# 通过 `Global.Get`、`LuaTable`、delegate 调用 Lua。
 - **值类型零分配**：纯值类型 struct 与枚举在 Lua↔C# 间往返不产生托管分配。
 - **生成绑定 + 反射兜底**：开发期无需生成即可运行，发布期用生成的强类型绑定替换反射路径。
@@ -20,16 +21,29 @@ LuaLoom 的核心不依赖 Unity：虚拟机封装、类型编解码、绑定生
 - Visual Studio 2022 的 C++ 工具链（Windows x64）
 - PowerShell 7
 
-当前只支持 Windows x64，Lua 版本固定 5.4.9。
+当前只支持 Windows x64。Lua 版本在构建时选择：5.3.6 或 5.4.9，默认 5.4.9；5.5 预留了画像，尚未验证。
 
 ## 从源码构建
 
+默认（Lua 5.4）：
+
 ```powershell
-pwsh scripts/fetch-lua.ps1          # 下载并校验 Lua 5.4.9
-pwsh scripts/build-native.ps1       # 编译 artifacts/native/win-x64/lua54.dll
+pwsh scripts/fetch-lua.ps1
+pwsh scripts/build-native.ps1       # 产出 artifacts/native/win-x64/lualoom.dll
 dotnet build LuaLoom.sln -c Release
 dotnet test  LuaLoom.sln -c Release
 ```
+
+Lua 5.3：
+
+```powershell
+pwsh scripts/fetch-lua.ps1 -Version 53
+pwsh scripts/build-native.ps1 -Version 53
+dotnet build LuaLoom.sln -c Release -p:LuaVersion=53
+dotnet test  LuaLoom.sln -c Release -p:LuaVersion=53
+```
+
+原生库统一命名为 `lualoom.dll`，同一次构建只对应一个 Lua 版本；切换版本时重新执行上面的原生构建。
 
 运行示例：
 
@@ -145,14 +159,16 @@ Console.WriteLine(env.MemorySnapshot(top: 10));
 ## 校验
 
 ```powershell
-pwsh scripts/ci.ps1
+pwsh scripts/ci.ps1              # Lua 5.4
+pwsh scripts/ci.ps1 -Version 53  # Lua 5.3
 ```
 
 依次执行原生构建、编译、测试、生成物一致性检查与示例运行。
 
 ## 已知限制
 
-- 只支持 Windows x64；不含 LuaJIT 与 Lua 5.3。
+- 只支持 Windows x64；不含 LuaJIT。
+- Lua 版本在构建时二选一（5.3.6 / 5.4.9），同一进程不能混用两个版本；5.5 仅预留画像。
 - 虚拟机与句柄是单线程的，跨线程调用抛异常。
 - 生成器覆盖 public 构造、字段、属性、方法、非泛型 delegate 与接口；泛型、`ref`/`out`/`params`、事件、操作符、索引器不在生成范围内。这些能力可通过反射路径或 `lua_loom_generic` 使用。
 - 未生成 delegate 时，`Get<TDelegate>` 会抛异常；接口有 `DispatchProxy` 兜底，事件委托由表达式树现场生成。
@@ -168,7 +184,7 @@ pwsh scripts/ci.ps1
 ## 相关项目
 
 - [xLua](https://github.com/Tencent/xLua)：面向 Unity 场景的成熟绑定方案，本项目对外 API 参考了它的使用习惯。
-- Lua 5.4.9：[lua.org](https://www.lua.org/)，采用 MIT 许可证。
+- Lua 5.3.6 / 5.4.9：[lua.org](https://www.lua.org/)，采用 MIT 许可证。
 
 ## 许可证
 

@@ -115,7 +115,7 @@ internal sealed class LuaMarshal : IDisposable
 
     public void PushReference(int id)
     {
-        LuaApi.lua_rawgeti(_state, LuaApi.LuaRegistryIndex, id);
+        LuaApi.lua_rawgeti(_state, LuaApi.Profile.RegistryIndex, id);
     }
 
     public LuaTable CreateTable(int arraySize = 0, int recordSize = 0)
@@ -550,12 +550,12 @@ internal sealed class LuaMarshal : IDisposable
 
     private void PushObjectCache()
     {
-        LuaApi.lua_rawgeti(_state, LuaApi.LuaRegistryIndex, _objectCacheRef);
+        LuaApi.lua_rawgeti(_state, LuaApi.Profile.RegistryIndex, _objectCacheRef);
     }
 
     private void CreateObjectUserdata(int id)
     {
-        var pointer = LuaApi.lua_newuserdatauv(_state, 4, 0);
+        var pointer = LuaApi.Profile.NewUserdata(_state, 4);
         NativeMarshal.WriteInt32(pointer, id);
         LuaApi.luaL_setmetatable(_state, ObjectMetaName);
     }

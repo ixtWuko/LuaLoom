@@ -7,7 +7,7 @@ using NativeMarshal = System.Runtime.InteropServices.Marshal;
 
 namespace LuaLoom;
 
-/// <summary>Lua 5.4 虚拟机。所有公共入口都要求同一线程调用。</summary>
+/// <summary>Lua 虚拟机（5.3 / 5.4 / 5.5）。所有公共入口都要求同一线程调用。</summary>
 public sealed partial class LuaEnv : IDisposable
 {
     private const string LoaderBridgeName = "lua_loom_loader";
@@ -295,7 +295,7 @@ public sealed partial class LuaEnv : IDisposable
 
     private int PushErrorHandler()
     {
-        LuaApi.lua_rawgeti(_state, LuaApi.LuaRegistryIndex, _errorHandlerRef);
+        LuaApi.lua_rawgeti(_state, LuaApi.Profile.RegistryIndex, _errorHandlerRef);
         return LuaApi.lua_gettop(_state);
     }
 
@@ -313,7 +313,7 @@ public sealed partial class LuaEnv : IDisposable
 
     private LuaTable CreateGlobalTable()
     {
-        LuaApi.lua_rawgeti(_state, LuaApi.LuaRegistryIndex, 2); // LUA_RIDX_GLOBALS
+        LuaApi.lua_rawgeti(_state, LuaApi.Profile.RegistryIndex, 2); // LUA_RIDX_GLOBALS
         var id = _marshal.AddReference(LuaApi.lua_gettop(_state));
         return new LuaTable(_marshal, id);
     }

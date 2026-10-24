@@ -59,7 +59,7 @@ public sealed class LuaCoroutine : IDisposable
         var main = _marshal.State;
         using var guard = LuaStackGuard.Enter(main);
 
-        LuaApi.lua_rawgeti(main, LuaApi.LuaRegistryIndex, _reference);
+        LuaApi.lua_rawgeti(main, LuaApi.Profile.RegistryIndex, _reference);
         var threadIndex = LuaApi.lua_gettop(main);
 
         foreach (var argument in args)
@@ -69,7 +69,7 @@ public sealed class LuaCoroutine : IDisposable
 
         LuaApi.lua_xmove(main, _thread, args.Length);
 
-        var status = LuaApi.lua_resume(_thread, main, args.Length, out var resultCount);
+        var status = LuaApi.Profile.Resume(_thread, main, args.Length, out var resultCount);
         if (status != LuaApi.LuaOk && status != LuaApi.LuaYield)
         {
             Status = LuaCoroutineStatus.Dead;

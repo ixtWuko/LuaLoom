@@ -12,13 +12,13 @@ internal sealed class LuaReferenceTable
         _state = state;
     }
 
-    public int Add(int index) => LuaApi.luaL_ref(_state, LuaApi.LuaRegistryIndex);
+    public int Add(int index) => LuaApi.luaL_ref(_state, LuaApi.Profile.RegistryIndex);
 
     public void Release(int id)
     {
         if (id != 0)
         {
-            LuaApi.luaL_unref(_state, LuaApi.LuaRegistryIndex, id);
+            LuaApi.luaL_unref(_state, LuaApi.Profile.RegistryIndex, id);
         }
     }
 }

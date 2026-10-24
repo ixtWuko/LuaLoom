@@ -11,10 +11,21 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="$(MSBuildThisFileDirectory)../../artifacts/native/win-x64/lua54.dll"
-          Link="lua54.dll"
-          CopyToOutputDirectory="PreserveNewest"
-          Condition="Exists('$(MSBuildThisFileDirectory)../../artifacts/native/win-x64/lua54.dll')" />
+    <AssemblyAttribute Include="LuaLoom.Native.LuaVersionAttribute">
+      <_Parameter1>$(LuaVersion)</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../artifacts/native/win-x64/lualoom.dll"
+          Link="lualoom.dll"
+          CopyToOutputDirectory="Always"
+          Condition="Exists('$(MSBuildThisFileDirectory)../../artifacts/native/win-x64/lualoom.dll')" />
+  </ItemGroup>
+
+  <Target Name="ValidateLuaVersion" BeforeTargets="Build"
+          Condition="'$(LuaVersion)' != '53' and '$(LuaVersion)' != '54' and '$(LuaVersion)' != '55'">
+    <Error Text="Unsupported LuaVersion '$(LuaVersion)'. Supported: 53, 54, 55." />
+  </Target>
 
 </Project>

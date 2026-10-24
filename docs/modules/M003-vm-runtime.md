@@ -6,7 +6,7 @@
 
 **场景**
 
-- 宿主启动：`new LuaEnv(options)` 得到一个可执行 Lua 5.4 的环境，`package.path` 已按选项初始化。
+- 宿主启动：`new LuaEnv(options)` 得到一个可执行 Lua（版本由构建决定）的环境，`package.path` 已按选项初始化。
 - 加载脚本：`AddLoader` 注册自定义读取逻辑，`DoString("require 'main'")` 拉起业务入口。
 - 运行期：周期性调用 `Tick()`，处理重入场景下不能立即释放的句柄。
 - 退出：`Dispose()` 关闭虚拟机，之后所有调用抛 `ObjectDisposedException`。
@@ -122,7 +122,7 @@ update(0.016);
 
 **初始化步骤**
 
-1. `ILibraryLoader.Load("lua54")` → `luaL_newstate()`；库加载失败抛 `LuaLibraryNotFoundException`，状态创建失败抛 `LuaException`。
+1. `ILibraryLoader.Load("lualoom")` → `luaL_newstate()`；库加载失败抛 `LuaLibraryNotFoundException`，状态创建失败抛 `LuaException`。
 2. `luaL_openlibs()` 打开标准库。
 3. 构造 `LuaMarshal`，创建 userdata 元表与引用表。
 4. 注册 `require` 的 searcher：先走 `_loaders`，再走 `package.path` 文件查找；loader 返回 `null` 视为未命中，修改 `moduleName` 为真实路径以保留调试信息。

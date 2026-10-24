@@ -853,7 +853,7 @@ internal static class Interop
             : throw new InvalidOperationException("LuaLoom environment is not installed for this state.");
 
     private static string GetUpvalueString(IntPtr state, int index) =>
-        ReadString(state, LuaApi.LuaRegistryIndex - index);
+        ReadString(state, LuaApi.Profile.RegistryIndex - index);
 
     private static string ReadString(IntPtr state, int index)
     {

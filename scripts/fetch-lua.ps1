@@ -1,16 +1,30 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    下载并校验 Lua 5.4.9 源码到 build/lua-5.4.9。
+    下载并校验指定版本的 Lua 源码到 build/<source>。
+.PARAMETER Version
+    lua-versions.json 中的版本号，默认 54。
 #>
+param(
+    [string]$Version = '54'
+)
+
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
 $buildDir = Join-Path $root 'build'
-$destDir = Join-Path $buildDir 'lua-5.4.9'
-$archive = Join-Path $buildDir 'lua-5.4.9.tar.gz'
-$url = 'https://www.lua.org/ftp/lua-5.4.9.tar.gz'
-$expectedSha256 = '2335b6c582a52654f94612bf10d2f4672805d05329aa6568b1d8cd9e5c6fb8e6'
+$versionsFile = Join-Path $PSScriptRoot 'lua-versions.json'
+
+$versions = Get-Content $versionsFile -Raw | ConvertFrom-Json
+$property = $versions.PSObject.Properties[$Version]
+if ($null -eq $property) {
+    $supported = ($versions.PSObject.Properties.Name -join ', ')
+    throw "Unsupported Lua version '$Version'. Supported: $supported"
+}
+
+$entry = $property.Value
+$destDir = Join-Path $buildDir $entry.source
+$archive = Join-Path $buildDir ($entry.source + '.tar.gz')
 
 if (Test-Path (Join-Path $destDir 'src/lua.h')) {
     Write-Host "Lua source already present: $destDir"
@@ -19,13 +33,13 @@ if (Test-Path (Join-Path $destDir 'src/lua.h')) {
 
 New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
 
-Write-Host "Downloading $url"
-Invoke-WebRequest -Uri $url -OutFile $archive
+Write-Host "Downloading $($entry.url)"
+Invoke-WebRequest -Uri $entry.url -OutFile $archive
 
 $actual = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actual -ne $expectedSha256) {
+if ($actual -ne $entry.sha256) {
     Remove-Item -Force $archive
-    throw "SHA-256 mismatch. Expected $expectedSha256, got $actual"
+    throw "SHA-256 mismatch. Expected $($entry.sha256), got $actual"
 }
 
 Write-Host "Extracting to $buildDir"
@@ -36,4 +50,4 @@ if (-not (Test-Path (Join-Path $destDir 'src/lua.h'))) {
     throw "Extraction failed: $destDir/src/lua.h not found"
 }
 
-Write-Host "Lua 5.4.9 ready: $destDir"
+Write-Host "Lua $Version ready: $destDir"

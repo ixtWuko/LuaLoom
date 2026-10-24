@@ -2,7 +2,7 @@
 
 ## 功能详细描述与预期
 
-负责与 Lua 原生库的全部交互边界：定位并加载 `lua54.dll`、声明 C API、守住每次跨边界的栈平衡、把 C 侧错误码转成托管异常。
+负责与 Lua 原生库的全部交互边界：定位并加载 `lualoom.dll`、声明 C API、守住每次跨边界的栈平衡、把 C 侧错误码转成托管异常。Lua 版本差异由 `LuaRuntimeProfile` 收敛，本模块其余部分不感知版本。
 
 **场景**
 
@@ -11,7 +11,8 @@
 
 **边界**
 
-- 只处理 Lua 5.4 的 C API，不提供 5.3 或 LuaJIT 的兼容分支。
+- 只处理 Lua 5.3 / 5.4 的 C API（5.5 预留画像），不提供 LuaJIT 的兼容分支。
+- 版本差异只允许出现在 `LuaRuntimeProfile` 与两个版本原生的声明里，其他代码不做版本判断。
 - 不实现类型映射与业务语义，`Push`/`Pop` 的具体规则属于 M002。
 - 不负责虚拟机生命周期，`lua_close` 由 M003 调。
 
@@ -88,9 +89,10 @@ panic 不在本模块处理：注册托管 panic 回调意味着异常可能穿�
 
 **算法**
 
-1. 加载：注册 `NativeLibrary.SetDllImportResolver`，把 `lua54` 的解析交给 `ILibraryLoader`；按裸库名 → 程序目录 → `runtimes/win-x64/native` → 程序集目录顺序尝试，全部失败抛 `LuaLibraryNotFoundException`，消息列出完整路径。解析失败时返回 `IntPtr.Zero`，回落到运行时默认解析。
+1. 加载：注册 `NativeLibrary.SetDllImportResolver`，把 `lualoom` 的解析交给 `ILibraryLoader`；按裸库名 → 程序目录 → `runtimes/win-x64/native` → 程序集目录顺序尝试，全部失败抛 `LuaLibraryNotFoundException`，消息列出完整路径。解析失败时返回 `IntPtr.Zero`，回落到运行时默认解析。
 2. 守卫：`Enter(L)` 记录 `lua_gettop(L)`；`Dispose()` 调 `lua_settop(L, _top)`。不吞异常，异常照常向上传播。
 3. 错误转换：`pcall` 封装读取返回值，非 `Ok` 时从栈顶取错误对象，按 `LuaType` 转成字符串，抛 `LuaException(status, message)`，并把错误对象弹出栈。
+4. 版本画像：`LuaRuntimeProfile` 提供 `RegistryIndex`、`NewUserdata`、`Resume` 三个入口；`Lua53Profile` 与 `Lua54Profile` 分别绑定各自的原生声明，构建时通过程序集元数据选定。
 
 **复杂度**：加载 O(1)（进程内缓存）；守卫 O(1)；`pcall` 封装 O(1)。
 
@@ -102,7 +104,7 @@ panic 不在本模块处理：注册托管 panic 回调意味着异常可能穿�
 
 **资源**
 
-- 原生库由 `scripts/build-native.ps1` 产出到 `artifacts/native/win-x64/lua54.dll`，随构建复制到输出目录。
+- 原生库由 `scripts/build-native.ps1 -Version <53|54|55>` 产出到 `artifacts/native/win-x64/lualoom.dll`，随构建复制到输出目录。
 - 无图片等界面资源。
 
 ## 测试方案
@@ -116,6 +118,6 @@ panic 不在本模块处理：注册托管 panic 回调意味着异常可能穿�
 | 嵌套两层守卫 | 内层 return、外层继续 push | 各层恢复各自的 top，互不影响 |
 | 语法错误 `"local = 1"` | `luaL_loadbufferx` | 返回 `ErrSyntax`，错误文本含行号 |
 | 运行时错误 `"error('boom')"` | 加载后调 `lua_pcallk` 封装 | 返回 `ErrRun`，错误对象转成 `LuaException`，消息含 `boom` |
-| 连续两次 `Load("lua54")` | 观察 loader | 底层只加载一次，返回同一句柄 |
+| 连续两次 `Load("lualoom")` | 观察 loader | 底层只加载一次，返回同一句柄 |
 
 异常覆盖四类：空与边界（空状态、栈顶 0）、非法输入（错误库名、语法错误）、依赖失败（DLL 缺失、错误码非 `Ok`）、重复与并发（重复加载、嵌套守卫、异常路径恢复）。

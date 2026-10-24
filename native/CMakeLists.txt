@@ -1,55 +1,36 @@
 cmake_minimum_required(VERSION 3.20)
-project(lua54 LANGUAGES C)
+project(lualoom LANGUAGES C)
+
+set(LUA_VERSION "54" CACHE STRING "Lua version: 53, 54, 55")
 
 if(NOT DEFINED LUA_SRC)
-    set(LUA_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../build/lua-5.4.9/src")
+    if(LUA_VERSION STREQUAL "53")
+        set(LUA_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../build/lua-5.3.6/src")
+    elseif(LUA_VERSION STREQUAL "55")
+        set(LUA_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../build/lua-5.5.1/src")
+    else()
+        set(LUA_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../build/lua-5.4.9/src")
+    endif()
 endif()
 
 if(NOT EXISTS "${LUA_SRC}/lua.h")
-    message(FATAL_ERROR "Lua source not found at ${LUA_SRC}. Run scripts/fetch-lua.ps1 first.")
+    message(FATAL_ERROR "Lua source not found at ${LUA_SRC}. Run scripts/fetch-lua.ps1 -Version ${LUA_VERSION} first.")
 endif()
 
-set(LUA_SOURCES
-    "${LUA_SRC}/lapi.c"
-    "${LUA_SRC}/lauxlib.c"
-    "${LUA_SRC}/lbaselib.c"
-    "${LUA_SRC}/lcode.c"
-    "${LUA_SRC}/lcorolib.c"
-    "${LUA_SRC}/lctype.c"
-    "${LUA_SRC}/ldblib.c"
-    "${LUA_SRC}/ldebug.c"
-    "${LUA_SRC}/ldo.c"
-    "${LUA_SRC}/ldump.c"
-    "${LUA_SRC}/lfunc.c"
-    "${LUA_SRC}/lgc.c"
-    "${LUA_SRC}/linit.c"
-    "${LUA_SRC}/liolib.c"
-    "${LUA_SRC}/llex.c"
-    "${LUA_SRC}/lmathlib.c"
-    "${LUA_SRC}/lmem.c"
-    "${LUA_SRC}/loadlib.c"
-    "${LUA_SRC}/lobject.c"
-    "${LUA_SRC}/lopcodes.c"
-    "${LUA_SRC}/loslib.c"
-    "${LUA_SRC}/lparser.c"
-    "${LUA_SRC}/lstate.c"
-    "${LUA_SRC}/lstring.c"
-    "${LUA_SRC}/lstrlib.c"
-    "${LUA_SRC}/ltable.c"
-    "${LUA_SRC}/ltablib.c"
-    "${LUA_SRC}/ltm.c"
-    "${LUA_SRC}/lundump.c"
-    "${LUA_SRC}/lutf8lib.c"
-    "${LUA_SRC}/lvm.c"
-    "${LUA_SRC}/lzio.c"
+# 用通配收集，避免每个 Lua 版本的源文件清单差异（如 5.3 的 lbitlib.c）
+file(GLOB LUA_SOURCES "${LUA_SRC}/*.c")
+list(REMOVE_ITEM LUA_SOURCES
+    "${LUA_SRC}/lua.c"
+    "${LUA_SRC}/luac.c"
+    "${LUA_SRC}/onelua.c"
 )
 
-add_library(lua54 SHARED ${LUA_SOURCES})
+add_library(lualoom SHARED ${LUA_SOURCES})
 
-target_compile_definitions(lua54 PRIVATE LUA_BUILD_AS_DLL)
-target_include_directories(lua54 PUBLIC "${LUA_SRC}")
+target_compile_definitions(lualoom PRIVATE LUA_BUILD_AS_DLL)
+target_include_directories(lualoom PUBLIC "${LUA_SRC}")
 
-set_target_properties(lua54 PROPERTIES
+set_target_properties(lualoom PROPERTIES
     C_STANDARD 99
-    OUTPUT_NAME "lua54"
+    OUTPUT_NAME "lualoom"
 )
