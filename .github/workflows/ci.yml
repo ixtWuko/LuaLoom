@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+          - os: ubuntu-22.04
+          - os: macos-14
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build native, test, check bindings, run sample
+        shell: pwsh
+        run: |
+          pwsh scripts/fetch-lua.ps1
+          pwsh scripts/build-native.ps1
+          dotnet build LuaLoom.sln -c Release
+          dotnet test LuaLoom.sln -c Release --no-build
+          dotnet run --project src/LuaLoom.Cli -c Release --no-build -- check --config lua-loom.json
+          dotnet run --project samples/LuaLoom.Sample -c Release --no-build

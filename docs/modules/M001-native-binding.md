@@ -89,7 +89,7 @@ panic 不在本模块处理：注册托管 panic 回调意味着异常可能穿�
 
 **算法**
 
-1. 加载：注册 `NativeLibrary.SetDllImportResolver`，把 `lualoom` 的解析交给 `ILibraryLoader`；按裸库名 → 程序目录 → `runtimes/win-x64/native` → 程序集目录顺序尝试，全部失败抛 `LuaLibraryNotFoundException`，消息列出完整路径。解析失败时返回 `IntPtr.Zero`，回落到运行时默认解析。
+1. 加载：注册 `NativeLibrary.SetDllImportResolver`，把 `lualoom` 的解析交给 `ILibraryLoader`；按 `LUALOOM_NATIVE_DIR` → 裸库名 → 程序目录 → `runtimes/<rid>/native` → 程序集目录 → 程序集下 `runtimes/<rid>/native` 顺序尝试，平台扩展名按 `.dll`/`.so`/`.dylib` 区分。全部失败抛 `LuaLibraryNotFoundException`，消息列出完整路径；解析失败返回 `IntPtr.Zero`，回落到运行时默认解析。
 2. 守卫：`Enter(L)` 记录 `lua_gettop(L)`；`Dispose()` 调 `lua_settop(L, _top)`。不吞异常，异常照常向上传播。
 3. 错误转换：`pcall` 封装读取返回值，非 `Ok` 时从栈顶取错误对象，按 `LuaType` 转成字符串，抛 `LuaException(status, message)`，并把错误对象弹出栈。
 4. 版本画像：`LuaRuntimeProfile` 提供 `RegistryIndex`、`NewUserdata`、`Resume` 三个入口；`Lua53Profile` 与 `Lua54Profile` 分别绑定各自的原生声明，构建时通过程序集元数据选定。
@@ -104,7 +104,7 @@ panic 不在本模块处理：注册托管 panic 回调意味着异常可能穿�
 
 **资源**
 
-- 原生库由 `scripts/build-native.ps1 -Version <53|54|55>` 产出到 `artifacts/native/win-x64/lualoom.dll`，随构建复制到输出目录。
+- 原生库由 `scripts/build-native.ps1 -Version <53|54|55>` 产出到 `artifacts/native/<rid>/lualoom.*`，随构建复制到输出目录。
 - 无图片等界面资源。
 
 ## 测试方案

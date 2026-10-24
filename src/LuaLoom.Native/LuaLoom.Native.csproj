@@ -3,6 +3,7 @@
   <PropertyGroup>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>LuaLoom.Native</RootNamespace>
+    <LuaNativeRid Condition="'$(LuaNativeRid)' == ''">$([System.Runtime.InteropServices.RuntimeInformation]::RuntimeIdentifier)</LuaNativeRid>
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,10 +18,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="$(MSBuildThisFileDirectory)../../artifacts/native/win-x64/lualoom.dll"
-          Link="lualoom.dll"
+    <None Include="$(MSBuildThisFileDirectory)../../artifacts/native/$(LuaNativeRid)/lualoom.*"
+          Link="%(Filename)%(Extension)"
           CopyToOutputDirectory="Always"
-          Condition="Exists('$(MSBuildThisFileDirectory)../../artifacts/native/win-x64/lualoom.dll')" />
+          Condition="Exists('$(MSBuildThisFileDirectory)../../artifacts/native/$(LuaNativeRid)')" />
   </ItemGroup>
 
   <Target Name="ValidateLuaVersion" BeforeTargets="Build"

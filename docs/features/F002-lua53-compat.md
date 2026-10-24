@@ -15,7 +15,7 @@
 | 编号 | 预期 | 观察方式 |
 | :-- | :-- | :-- |
 | E1 | 不传参数时仍按 5.4 构建，现有用例全绿 | 默认 `dotnet test` |
-| E2 | `-p:LuaVersion=53` 构建出 5.3 版 `lualoom.dll`，并链接到同一套 C# 代码 | 构建产物与 `LuaApi.Profile` 一致 |
+| E2 | `-p:LuaVersion=53` 构建出 5.3 版原生库，并链接到同一套 C# 代码 | 构建产物与 `LuaApi.Profile` 一致 |
 | E3 | 5.3 下对象 userdata、协程、零 GC struct 均可用 | 同一组用例在 5.3 下通过 |
 | E4 | 原生库按版本下载、校验、编译，互不覆盖 | `fetch-lua.ps1`/`build-native.ps1` 指定版本 |
 | E5 | 版本差异只体现在 `LuaRuntimeProfile` 的实现里 | 业务代码检索不到版本判断 |
@@ -50,11 +50,11 @@ dotnet test  LuaLoom.sln -c Release -p:LuaVersion=53
 
 | 版本 | 原生库 | MSBuild 属性 | 状态 |
 | :-- | :-- | :-- | :-- |
-| 5.4.9 | `artifacts/native/win-x64/lualoom.dll`（固定名） | 默认或 `54` | 已验证 |
+| 5.4.9 | `artifacts/native/<rid>/lualoom.*` | 默认或 `54` | 已验证 |
 | 5.3.6 | 同上，构建时替换为 5.3 版 | `53` | 已验证 |
 | 5.5.x | 同上，构建时替换为 5.5 版 | `55` | 仅预留，未验证 |
 
-原生库统一命名为 `lualoom.dll`，所以同一次构建只能使用一个版本；需要切换时重新构建原生库。DllImport 名称固定，不随版本变化。
+原生库统一命名为 `lualoom`（Windows `.dll`、Linux `.so`、macOS `.dylib`），所以同一次构建只能使用一个版本；需要切换时重新构建原生库。DllImport 名称固定，不随版本变化。
 
 ## 具体实现细节
 
@@ -85,7 +85,7 @@ dotnet test  LuaLoom.sln -c Release -p:LuaVersion=53
 
 - `scripts/lua-versions.json`：版本 → 源码包、URL、SHA-256 的映射表；新增版本只加一条。
 - `fetch-lua.ps1 -Version <53|54|55>`：按表下载、校验、解压。
-- `build-native.ps1 -Version <53|54|55>`：独立构建目录，产物统一命名为 `lualoom.dll`，同一时间只保留一个版本。
+- `build-native.ps1 -Version <53|54|55>`：独立构建目录，产物按平台命名为 `lualoom.dll` / `liblualoom.so` / `liblualoom.dylib`，同一时间只有一个版本。
 - `native/CMakeLists.txt` 接收 `LUA_VERSION`：选择源码目录、5.3 追加 `lbitlib.c`、输出名固定 `lualoom`。
 
 **测试**：同一组用例通过 `-p:LuaVersion` 切换；CI 分别跑 5.4 与 5.3 两次。
@@ -100,7 +100,7 @@ dotnet test  LuaLoom.sln -c Release -p:LuaVersion=53
 | 输入 | 操作 | 预期 |
 | :-- | :-- | :-- |
 | 默认构建 | `dotnet test` | 82 条全绿，`LuaApi.Profile.Version` 为 `54` |
-| `-p:LuaVersion=53` + 5.3 版 `lualoom.dll` | `dotnet test` | 同一组用例全绿 |
+| `-p:LuaVersion=53` + 5.3 版原生库 | `dotnet test` | 同一组用例全绿 |
 | 原生库缺失 | 构建后运行 | `LuaLibraryNotFoundException` 列出 `lualoom` 的搜索路径 |
 | 5.3 下协程 | 两次 `Resume` | 与 5.4 结果一致 |
 | 5.3 下对象 userdata | 构造、字段读写、`__gc` | 行为与 5.4 一致 |

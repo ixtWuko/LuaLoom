@@ -163,6 +163,9 @@ public sealed class NativeBindingTests
         Assert.Equal("lua99", exception.LibraryName);
         Assert.NotEmpty(exception.AttemptedPaths);
         Assert.Contains("lua99", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            exception.AttemptedPaths,
+            static path => path.Contains(Path.Combine("runtimes", System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier, "native"), StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

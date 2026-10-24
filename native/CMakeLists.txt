@@ -27,10 +27,17 @@ list(REMOVE_ITEM LUA_SOURCES
 
 add_library(lualoom SHARED ${LUA_SOURCES})
 
-target_compile_definitions(lualoom PRIVATE LUA_BUILD_AS_DLL)
+target_compile_definitions(lualoom PRIVATE $<$<PLATFORM_ID:Windows>:LUA_BUILD_AS_DLL>)
 target_include_directories(lualoom PUBLIC "${LUA_SRC}")
 
 set_target_properties(lualoom PROPERTIES
     C_STANDARD 99
+    POSITION_INDEPENDENT_CODE ON
     OUTPUT_NAME "lualoom"
 )
+
+if(UNIX AND NOT APPLE)
+    target_link_libraries(lualoom PRIVATE m dl)
+elseif(APPLE)
+    target_link_libraries(lualoom PRIVATE m)
+endif()

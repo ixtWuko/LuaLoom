@@ -18,10 +18,19 @@ LuaLoom 的核心不依赖 Unity：虚拟机封装、类型编解码、绑定生
 
 - .NET SDK 8.0 或更高；运行 `net8.0` 目标需要 .NET 8 运行时
 - CMake 3.20 以上
-- Visual Studio 2022 的 C++ 工具链（Windows x64）
+- C 工具链：Windows 用 Visual Studio 2022，Linux/macOS 用系统自带的 gcc/clang 与 make
 - PowerShell 7
 
-当前只支持 Windows x64。Lua 版本在构建时选择：5.3.6 或 5.4.9，默认 5.4.9；5.5 预留了画像，尚未验证。
+平台与验证范围：
+
+| 平台 | 状态 |
+| :-- | :-- |
+| Windows x64 | 本地验证 |
+| Linux x64 | GitHub Actions 工作流已配置（Ubuntu 22.04，glibc ≥ 2.35） |
+| macOS arm64 | GitHub Actions 工作流已配置（macOS 14） |
+| Windows arm64 / Linux arm64 | 未覆盖 |
+
+Lua 版本在构建时选择：5.3.6 或 5.4.9，默认 5.4.9；5.5 预留了画像，尚未验证。
 
 ## 从源码构建
 
@@ -29,7 +38,7 @@ LuaLoom 的核心不依赖 Unity：虚拟机封装、类型编解码、绑定生
 
 ```powershell
 pwsh scripts/fetch-lua.ps1
-pwsh scripts/build-native.ps1       # 产出 artifacts/native/win-x64/lualoom.dll
+pwsh scripts/build-native.ps1       # 产出 artifacts/native/<rid>/lualoom.*
 dotnet build LuaLoom.sln -c Release
 dotnet test  LuaLoom.sln -c Release
 ```
@@ -167,7 +176,7 @@ pwsh scripts/ci.ps1 -Version 53  # Lua 5.3
 
 ## 已知限制
 
-- 只支持 Windows x64；不含 LuaJIT。
+- 平台：Windows x64 本地验证，Linux x64 与 macOS arm64 由 CI 验证；Windows arm64、Linux arm64、iOS/Android/WebGL 未覆盖。不含 LuaJIT。
 - Lua 版本在构建时二选一（5.3.6 / 5.4.9），同一进程不能混用两个版本；5.5 仅预留画像。
 - 虚拟机与句柄是单线程的，跨线程调用抛异常。
 - 生成器覆盖 public 构造、字段、属性、方法、非泛型 delegate 与接口；泛型、`ref`/`out`/`params`、事件、操作符、索引器不在生成范围内。这些能力可通过反射路径或 `lua_loom_generic` 使用。
