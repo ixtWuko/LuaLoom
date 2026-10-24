@@ -51,6 +51,7 @@
 | E19 | 一维数组参数/返回值可由生成绑定编解码，元素类型受支持 | `Sum(int[])` 与 `Double(int[])` |
 | E20 | xLua 兼容 API：`typeof`、`cast`、`uint64.*`、`xlua.get_generic_method`、`xlua.private_accessible`、`xlua.structclone` | 对应脚本断言 |
 | E21 | Lua table 作为方法参数时自动转换为 class/struct/interface | `PointMath.Sum({ X = 1, Y = 2 })` |
+| E22 | `decimal` 生成路径按 16 字节 struct userdata 无损传递 | `DecimalMethods.Echo` / `Add` |
 
 **非目标**
 

@@ -1923,6 +1923,11 @@ public static class CodeGenerator
             return $"global::LuaLoom.LuaBinding.ReadArray<{TypeRef(type.GetElementType()!)}>(L, {index})";
         }
 
+        if (Is(type, typeof(decimal)))
+        {
+            return $"global::LuaLoom.LuaBinding.ReadStruct<decimal>(L, {index})";
+        }
+
         if (type.IsEnum)
         {
             return $"({TypeRef(type)})global::LuaLoom.LuaBinding.ReadLong(L, {index})";
@@ -1966,6 +1971,11 @@ public static class CodeGenerator
         if (type.IsArray && type.GetArrayRank() == 1)
         {
             return $"global::LuaLoom.LuaBinding.PushArray<{TypeRef(type.GetElementType()!)}>(L, {expression});";
+        }
+
+        if (Is(type, typeof(decimal)))
+        {
+            return $"global::LuaLoom.LuaBinding.PushStruct<decimal>(L, {expression});";
         }
 
         if (type.IsEnum)

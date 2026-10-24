@@ -234,6 +234,10 @@ internal sealed class LuaMarshal : IDisposable
                 : Unsafe.As<T, string?>(ref value);
             LuaApi.lua_pushstring(_state, text);
         }
+        else if (type == typeof(decimal))
+        {
+            StructCodec.Push(_state, Unsafe.As<T, decimal>(ref value));
+        }
         else if (type.IsEnum)
         {
             LuaApi.lua_pushinteger(_state, EnumToInt64(value));
@@ -337,6 +341,12 @@ internal sealed class LuaMarshal : IDisposable
         {
             var value = ReadString(index);
             return Unsafe.As<string, T>(ref value);
+        }
+
+        if (type == typeof(decimal))
+        {
+            var value = StructCodec.Read<decimal>(_state, index);
+            return Unsafe.As<decimal, T>(ref value);
         }
 
         if (type.IsEnum)
@@ -448,6 +458,11 @@ internal sealed class LuaMarshal : IDisposable
             return ReadString(index);
         }
 
+        if (type == typeof(decimal))
+        {
+            return Read<decimal>(index);
+        }
+
         if (type.IsEnum)
         {
             return Enum.ToObject(type, ReadInteger(index, type));
@@ -504,6 +519,9 @@ internal sealed class LuaMarshal : IDisposable
                 return;
             case char charValue:
                 LuaApi.lua_pushstring(_state, charValue.ToString());
+                return;
+            case decimal decimalValue:
+                StructCodec.Push(_state, decimalValue);
                 return;
             case string text:
                 LuaApi.lua_pushstring(_state, text);

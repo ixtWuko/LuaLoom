@@ -192,6 +192,13 @@ public static class PointMath
     public static int Sum(Point point) => point.X + point.Y;
 }
 
+public static class DecimalMethods
+{
+    public static decimal Echo(decimal value) => value;
+
+    public static decimal Add(decimal left, decimal right) => left + right;
+}
+
 public static class ArrayMethods
 {
     public static int Sum(int[] values)
