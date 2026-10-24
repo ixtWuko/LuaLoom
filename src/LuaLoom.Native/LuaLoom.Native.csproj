@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>LuaLoom.Native</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="LuaLoom.Core" />
+    <InternalsVisibleTo Include="LuaLoom.UnitTests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../artifacts/native/win-x64/lua54.dll"
+          Link="lua54.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('$(MSBuildThisFileDirectory)../../artifacts/native/win-x64/lua54.dll')" />
+  </ItemGroup>
+
+</Project>

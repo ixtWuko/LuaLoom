@@ -1,0 +1,17 @@
+# 第三方参考克隆，仅本地分析
+refs/
+
+# 构建产物
+artifacts/
+build/
+**/bin/
+**/obj/
+
+# 测试与覆盖率
+TestResults/
+*.trx
+coverage/
+
+# IDE
+.vs/
+*.user

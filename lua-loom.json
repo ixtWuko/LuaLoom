@@ -1,0 +1,11 @@
+{
+  "assembly": "artifacts/bin/LuaLoom.Sample.Types/release/LuaLoom.Sample.Types.dll",
+  "output": "samples/LuaLoom.Sample/Generated",
+  "namespace": "LuaLoom.Sample.Generated",
+  "luaCallCSharp": [
+    "LuaLoom.Sample.Player"
+  ],
+  "csharpCallLua": [
+    "LuaLoom.Sample.IntCallback"
+  ]
+}

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>LuaLoom.Cli</RootNamespace>
+    <AssemblyName>lua-loom-gen</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../LuaLoom.CodeGen/LuaLoom.CodeGen.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>LuaLoom.Sample</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../LuaLoom.Sample.Types/LuaLoom.Sample.Types.csproj" />
+    <ProjectReference Include="../../src/LuaLoom.Core/LuaLoom.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="scripts/**/*.lua" CopyToOutputDirectory="PreserveNewest" LinkBase="scripts" />
+  </ItemGroup>
+
+</Project>
