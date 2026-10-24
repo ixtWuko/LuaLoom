@@ -66,7 +66,7 @@ public sealed class LuaFunction : LuaReference
 }
 ```
 
-`LuaTable.Cast<T>` 由 M004 以 `partial` 方式补充。生成代码只允许调用 `LuaBinding` 的强类型原语，不接触 `LuaApi`，也不自行管理栈顶。
+`LuaTable.Cast<T>` 由 M004 以 `partial` 方式补充。生成代码只允许调用 `LuaBinding` 的强类型原语，不接触 `LuaApi`，也不自行管理栈顶。`LuaFunction.Call` 出错时抛 `LuaException`，消息与 `Traceback` 包含 Lua 栈回溯。
 
 ```csharp
 public static class LuaBinding            // 生成代码调用面，参数索引从 1 开始

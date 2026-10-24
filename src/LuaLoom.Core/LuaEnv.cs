@@ -293,7 +293,7 @@ public sealed partial class LuaEnv : IDisposable
         }
     }
 
-    private int PushErrorHandler()
+    internal int PushErrorHandler()
     {
         LuaApi.lua_rawgeti(_state, LuaApi.Profile.RegistryIndex, _errorHandlerRef);
         return LuaApi.lua_gettop(_state);

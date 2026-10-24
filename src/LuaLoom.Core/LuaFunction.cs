@@ -37,6 +37,8 @@ public sealed class LuaFunction : LuaReference
         var state = Marshal.State;
         using var guard = LuaStackGuard.Enter(state);
         var baseTop = LuaApi.lua_gettop(state);
+        var errorFunction = Marshal.Environment?.PushErrorHandler() ?? 0;
+        var hasErrorHandler = errorFunction != 0;
 
         Marshal.PushReference(Id);
         foreach (var argument in args)
@@ -48,7 +50,7 @@ public sealed class LuaFunction : LuaReference
             state,
             args.Length,
             LuaApi.LuaMultRet,
-            errorFunction: 0,
+            errorFunction,
             context: IntPtr.Zero,
             continuation: IntPtr.Zero);
 
@@ -57,11 +59,11 @@ public sealed class LuaFunction : LuaReference
             throw LuaErrors.Create(state, (LuaStatus)status, "chunk");
         }
 
-        var count = LuaApi.lua_gettop(state) - baseTop;
+        var count = LuaApi.lua_gettop(state) - baseTop - (hasErrorHandler ? 1 : 0);
         var results = new object[count];
         for (var i = 0; i < count; i++)
         {
-            var index = baseTop + 1 + i;
+            var index = baseTop + (hasErrorHandler ? 2 : 1) + i;
             results[i] = returnTypes is null
                 ? Marshal.ReadObject(index)!
                 : Marshal.Read(returnTypes[i], index)!;

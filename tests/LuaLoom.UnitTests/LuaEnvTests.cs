@@ -130,6 +130,18 @@ public sealed class LuaEnvTests
     }
 
     [Fact]
+    public void LuaFunctionCall_RuntimeError_IncludesTraceback()
+    {
+        using var env = new LuaEnv();
+        using var function = env.LoadString("error('call boom')", "call_script");
+
+        var exception = Assert.Throws<LuaException>(() => function.Call());
+
+        Assert.Contains("call boom", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("stack traceback:", exception.Traceback, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CrossThreadCall_Throws()
     {
         using var env = new LuaEnv();
