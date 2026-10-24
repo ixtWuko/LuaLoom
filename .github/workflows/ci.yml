@@ -34,12 +34,6 @@ jobs:
           pwsh scripts/fetch-lua.ps1
           pwsh scripts/build-native.ps1
           dotnet build LuaLoom.sln -c Release
-
-          Write-Host "LuaNativeRid: $(dotnet msbuild src/LuaLoom.Native/LuaLoom.Native.csproj -getProperty:LuaNativeRid)"
-          Get-ChildItem artifacts/native -Recurse -File | ForEach-Object FullName
-          Get-ChildItem artifacts/bin/LuaLoom.Native -Recurse -File | Where-Object Name -like '*lualoom*' | ForEach-Object FullName
-          Get-ChildItem artifacts/bin/LuaLoom.UnitTests -Recurse -File | Where-Object Name -like '*lualoom*' | ForEach-Object FullName
-
           dotnet test LuaLoom.sln -c Release --no-build
           dotnet run --project src/LuaLoom.Cli -c Release --no-build -- check --config lua-loom.json
           dotnet run --project samples/LuaLoom.Sample -c Release --no-build

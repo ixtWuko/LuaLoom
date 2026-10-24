@@ -18,7 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="$(MSBuildThisFileDirectory)../../artifacts/native/$(LuaNativeRid)/lualoom.*"
+    <Content Include="$(MSBuildThisFileDirectory)../../artifacts/native/$(LuaNativeRid)/*lualoom.*"
              Link="%(Filename)%(Extension)"
              CopyToOutputDirectory="Always"
              Condition="Exists('$(MSBuildThisFileDirectory)../../artifacts/native/$(LuaNativeRid)')" />
