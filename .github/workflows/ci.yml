@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-2022
           - os: ubuntu-22.04
           - os: macos-14
     runs-on: ${{ matrix.os }}
@@ -28,9 +28,19 @@ jobs:
       - name: Build native, test, check bindings, run sample
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
           pwsh scripts/fetch-lua.ps1
           pwsh scripts/build-native.ps1
           dotnet build LuaLoom.sln -c Release
           dotnet test LuaLoom.sln -c Release --no-build
           dotnet run --project src/LuaLoom.Cli -c Release --no-build -- check --config lua-loom.json
           dotnet run --project samples/LuaLoom.Sample -c Release --no-build
+
+      - name: Show native assets
+        if: failure()
+        shell: pwsh
+        run: |
+          Get-ChildItem artifacts/native -Recurse -File | Select-Object FullName
+          Get-ChildItem artifacts/bin/LuaLoom.UnitTests -Recurse -File -Filter '*lualoom*' | Select-Object FullName
