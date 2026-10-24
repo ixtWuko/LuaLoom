@@ -24,6 +24,7 @@ public sealed class CodeGenTests
             "LuaLoom.UnitTests.Sample.Bag",
             "LuaLoom.UnitTests.Sample.Parsing",
             "LuaLoom.UnitTests.Sample.ArrayMethods",
+            "LuaLoom.UnitTests.Sample.Money",
         ],
         CSharpCallLua =
         [
@@ -48,6 +49,7 @@ public sealed class CodeGenTests
         Assert.Contains("LuaLoom_UnitTests_Sample_BagBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_ParsingBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_ArrayMethodsBinder.g.cs", names);
+        Assert.Contains("LuaLoom_UnitTests_Sample_MoneyBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_IntOpInvoker.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_ICalculatorImpl.g.cs", names);
         Assert.Contains("System_Action_int_Invoker.g.cs", names);
@@ -82,6 +84,10 @@ public sealed class CodeGenTests
         var arrays = result.Files.Single(static f => f.FileName == "LuaLoom_UnitTests_Sample_ArrayMethodsBinder.g.cs");
         Assert.Contains("ReadArray<int>", arrays.Content, StringComparison.Ordinal);
         Assert.Contains("PushArray<int>", arrays.Content, StringComparison.Ordinal);
+
+        var money = result.Files.Single(static f => f.FileName == "LuaLoom_UnitTests_Sample_MoneyBinder.g.cs");
+        Assert.Contains("Operators = new", money.Content, StringComparison.Ordinal);
+        Assert.Contains("Operator_Addition", money.Content, StringComparison.Ordinal);
         Assert.Matches("^[A-Za-z0-9_]+\\.g\\.cs$", generic.FileName);
     }
 

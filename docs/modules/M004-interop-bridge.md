@@ -17,6 +17,8 @@
 - 绑定只覆盖部分成员时，未命中的键回落到反射：继承成员、事件、含 `out`/`ref`/`params` 的方法仍可调用。
 - `out` / `ref` / `params`：`TryParse('42')` 返回 `true, 42`，`Bump(1)` 返回 `2`，`Join('-', 1, 2, 3)` 得到 `"1-2-3"`。
 - 扩展方法：`p:Triple(2)` 转发到已注册的 `PlayerExtensions.Triple(p, 2)`，实例作为第一个参数；未注册的扩展类不可见。
+- 操作符：配置类型优先使用生成的 `Operators`，未命中再走反射；支持 `+ - * / %`、一元 `-`、`==`、`<`、`<=`。
+- xLua 兼容 API：`typeof`、`cast`、`uint64.*`、`xlua.get_generic_method`。
 
 **边界**
 
@@ -37,7 +39,7 @@
 | E7 | 反射兜底里 C# 抛出的异常转成 Lua 错误，脚本可 `pcall` 捕获 | 脚本断言 |
 | E8 | `Cast<T>` 是值拷贝，C# 侧修改不回写原表 | 修改后读表值不变 |
 | E9 | `CS.Namespace.Type(...)` 能构造已注册类型的对象、访问静态成员；未注册类型走反射仍可用 | 脚本调用断言 |
-| E10 | `+ - * / %`、一元 `-`、`==`、`<`、`<=` 转发到 C# 运算符 | 构造带运算符的类型断言结果 |
+| E10 | `+ - * / %`、一元 `-`、`==`、`<`、`<=` 转发到 C# 运算符；配置类型优先走生成 thunk | 构造带运算符的类型断言结果 |
 | E11 | 非字符串键访问优先走绑定索引器，未命中再反射 `this[...]` | `bag[1] = 5; return bag[1]` |
 | E12 | `('+', fn)` 订阅、`('-', fn)` 退订，事件触发时回调收到 C# 参数 | 计数用例验证退订后不再触发 |
 | E13 | `lua_loom_generic(type, 'Method', T1, ...)` 闭合泛型方法并调用，静态与实例都可用 | 两个用例分别验证 |
@@ -47,6 +49,7 @@
 | E17 | `params` 把剩余实参打包成数组，允许 0 个实参；单方法组可由生成绑定处理 | `Join('-', 1, 2, 3)` 与 `Sum()` |
 | E18 | 实例成员未命中时可调用扩展方法，实例作为首参 | `p:Triple(2)` 返回 `p.Hp * 2` |
 | E19 | 一维数组参数/返回值可由生成绑定编解码，元素类型受支持 | `Sum(int[])` 与 `Double(int[])` |
+| E20 | xLua 兼容 API：`typeof`、`cast`、`uint64.*`、`xlua.get_generic_method` | 对应脚本断言 |
 
 **非目标**
 
@@ -171,11 +174,12 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 7. 重载解析：反射路径按参数形状装配并评分，精确类型优先，其次可转换类型，最后是可使用默认值的候选；得分最高者胜出，同分取声明顺序第一个。生成路径对同参数个数重载按 Lua 类型条件分派，无法覆盖的组合回退反射。
 8. 类型解析：先查已注册的 `LuaTypeBinding`，再按 `EnableReflectionFallback` 走反射，最后抛 Lua 错误；类表统一安装带 `fqn` 的分派入口，绑定未命中的键继续走反射。
 9. 参数装配：`out` 填默认值且不消耗实参，`ref` 与普通参数各消耗一个，`params` 把剩余实参转换后写入数组；调用后先压返回值（非 `void`），再按参数顺序压 `ref`/`out`，`in` 不回写。单方法组由生成绑定执行同一规则，复杂重载组回退反射。
-10. 操作符：实例 metatable 上挂 `__add`/`__sub`/`__mul`/`__div`/`__mod`/`__unm`/`__eq`/`__lt`/`__le`，按名称查 `op_*` 静态方法并调用；`__unm` 按 Lua 约定收到两个相同操作数，只取第一个匹配单参数方法；`__eq` 无运算符时退回引用比较。
+10. 操作符：实例 metatable 上挂 `__add`/`__sub`/`__mul`/`__div`/`__mod`/`__unm`/`__eq`/`__lt`/`__le`；先查配置类型的生成 `Operators`，未命中再按名称查 `op_*` 静态方法。`__unm` 按 Lua 约定收到两个相同操作数，只取第一个匹配单参数方法；`__eq` 无运算符时退回引用比较。
 11. 索引器：键不是字符串时先查绑定的 `InstanceIndexer`/`InstanceIndexerSet`，未处理再走 `this[...]` 反射；字符串键仍按成员名解析。
 12. 事件：`__index` 命中 `EventInfo` 时返回闭包；`('+', fn)` 用 `LuaEventDelegateFactory` 把 Lua 函数包成事件委托并登记，`('-', fn)` 按 `lua_topointer` 找到同一函数对应的委托并移除，随后释放函数句柄。订阅关系存放在 `ConditionalWeakTable`，对象被回收时随之释放。
 13. 泛型方法：`lua_loom_generic(type, methodName, T1, ...)` 解析泛型定义，按类型参数个数匹配，`MakeGenericMethod` 闭合后返回调用器；静态方法参数从索引 1 开始，实例方法索引 1 是对象、参数从 2 开始。
 14. 扩展方法：实例成员未命中时，只在 `RegisterExtensionType` 注册过的 public static 类中查找 `ExtensionAttribute` 方法，要求首参类型可由实例类型赋值；结果按 `(Type, Name)` 缓存，命中后复用静态方法调用闭包。未注册的扩展类不会被扫描或访问。
+15. xLua 兼容 API：`typeof` 返回 `Type` 对象；`cast` 校验对象可赋值后返回同一对象视图；`uint64.*` 用无符号位模式实现解析、比较、除法与取模；`xlua.get_generic_method` 是 `lua_loom_generic` 的 `xlua` 命名空间别名。
 
 **复杂度**：`Cast` O(成员数)（缓存后不再反射查找）；delegate 调用 O(1)；反射兜底按成员名查找，未做跨调用缓存。
 
@@ -214,6 +218,9 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 | 扩展方法 `Triple(this Player, int)` | `p:Triple(2)` | 返回 `p.Hp * 2` |
 | 绑定的非字符串索引器 | `bag[1] = 5; return bag[1]` | 走 `InstanceIndexer`/`InstanceIndexerSet` |
 | `int[]` 参数与返回值 | `Sum({1,2,3})` 与 `Double({1,2})` | 生成绑定与反射结果一致 |
+| 配置类型的 `__add` | `Money(1) + Money(2)` | 走生成的 `Operators` |
+| `typeof`/`cast`/`uint64` | 脚本调用 | 返回 `Type`、对象视图与无符号结果 |
+| `xlua.get_generic_method` | 调用泛型方法 | 与 `lua_loom_generic` 结果一致 |
 | 只绑定 `Hp` 的 `Player` | 读 `Name`、调 `Join` | 回落反射成功 |
 | 空绑定 + `Emitter` | 订阅 `Changed` 并 `Raise` | 回调收到参数 |
 | `TryParse(string, out int)` | 传 `"42"` | 返回 `true, 42` |

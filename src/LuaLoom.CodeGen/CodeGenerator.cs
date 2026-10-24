@@ -48,6 +48,19 @@ public sealed class GenerationResult
 
 public static class CodeGenerator
 {
+    private static readonly (string LuaName, string MethodName)[] OperatorBindings =
+    [
+        ("__add", "op_Addition"),
+        ("__sub", "op_Subtraction"),
+        ("__mul", "op_Multiply"),
+        ("__div", "op_Division"),
+        ("__mod", "op_Modulus"),
+        ("__unm", "op_UnaryNegation"),
+        ("__eq", "op_Equality"),
+        ("__lt", "op_LessThan"),
+        ("__le", "op_LessThanOrEqual"),
+    ];
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -394,6 +407,7 @@ public static class CodeGenerator
         var instanceFields = SupportedFields(type, BindingFlags.Instance, includeBase: includeBase);
         var staticFields = SupportedFields(type, BindingFlags.Static, includeBase: includeBase);
         var indexer = FindIndexer(type);
+        var operators = FindOperators(type);
 
         var hasInstance = instanceMethods.Count > 0
             || instanceProperties.Count > 0
@@ -440,6 +454,18 @@ public static class CodeGenerator
             }
         }
 
+        if (operators.Count > 0)
+        {
+            builder.AppendLine("        Operators = new global::System.Collections.Generic.Dictionary<string, global::LuaLoom.Native.LuaCSFunction>");
+            builder.AppendLine("        {");
+            foreach (var (luaName, method) in operators)
+            {
+                builder.AppendLine($"            [\"{luaName}\"] = {OperatorHandlerName(method)},");
+            }
+
+            builder.AppendLine("        },");
+        }
+
         builder.AppendLine("    };");
 
         if (constructors.Count > 0)
@@ -460,6 +486,11 @@ public static class CodeGenerator
         if (indexer is not null)
         {
             EmitIndexerHandlers(builder, type, indexer);
+        }
+
+        if (operators.Count > 0)
+        {
+            EmitOperatorHandlers(builder, type, operators);
         }
 
         builder.AppendLine("}");
@@ -692,6 +723,99 @@ public static class CodeGenerator
         builder.AppendLine("        return 0;");
         builder.AppendLine("    }");
     }
+
+    private static List<(string LuaName, MethodInfo Method)> FindOperators(Type type)
+    {
+        var methods = type.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy);
+        var operators = new List<(string LuaName, MethodInfo Method)>();
+
+        foreach (var (luaName, methodName) in OperatorBindings)
+        {
+            var parameterCount = methodName == "op_UnaryNegation" ? 1 : 2;
+            var method = methods
+                .Where(m => m.Name == methodName)
+                .Where(m => m.GetParameters().Length == parameterCount)
+                .Where(m => m.GetParameters().All(static p => IsSupportedOperatorType(p.ParameterType)))
+                .Where(m => IsSupportedOperatorType(m.ReturnType))
+                .OrderBy(static m => m.GetParameters().Length)
+                .FirstOrDefault();
+
+            if (method is not null)
+            {
+                operators.Add((luaName, method));
+            }
+        }
+
+        return operators;
+    }
+
+    private static bool IsSupportedOperatorType(Type type)
+    {
+        if (type.IsByRef || type.IsPointer || type.IsGenericParameter || type.IsGenericType || type.IsArray)
+        {
+            return false;
+        }
+
+        if (type.IsValueType && !type.IsPrimitive && !type.IsEnum)
+        {
+            return false;
+        }
+
+        return type.IsClass
+            || type.IsPrimitive
+            || type.IsEnum
+            || Is(type, typeof(string))
+            || Is(type, typeof(object));
+    }
+
+    private static void EmitOperatorHandlers(
+        StringBuilder builder,
+        Type type,
+        List<(string LuaName, MethodInfo Method)> operators)
+    {
+        foreach (var (_, method) in operators)
+        {
+            var parameters = method.GetParameters();
+            builder.AppendLine();
+            builder.AppendLine($"    private static int {OperatorHandlerName(method)}(global::System.IntPtr L)");
+            builder.AppendLine("    {");
+            builder.AppendLine($"        var left = ({TypeRef(parameters[0].ParameterType)})global::LuaLoom.LuaBinding.ReadObject(L, 1)!;");
+
+            if (parameters.Length == 2)
+            {
+                builder.AppendLine(
+                    $"        var right = {ReadExpression(parameters[1].ParameterType, 2)};");
+                builder.AppendLine(
+                    $"        var result = left {OperatorToken(method.Name)} right;");
+            }
+            else
+            {
+                builder.AppendLine(
+                    $"        var result = {OperatorToken(method.Name)}left;");
+            }
+
+            builder.AppendLine($"        {PushStatement(method.ReturnType, "result")}");
+            builder.AppendLine("        return 1;");
+            builder.AppendLine("    }");
+        }
+    }
+
+    private static string OperatorHandlerName(MethodInfo method) =>
+        "Operator_" + method.Name.Replace("op_", string.Empty, StringComparison.Ordinal);
+
+    private static string OperatorToken(string methodName) => methodName switch
+    {
+        "op_Addition" => "+",
+        "op_Subtraction" => "-",
+        "op_Multiply" => "*",
+        "op_Division" => "/",
+        "op_Modulus" => "%",
+        "op_UnaryNegation" => "-",
+        "op_Equality" => "==",
+        "op_LessThan" => "<",
+        "op_LessThanOrEqual" => "<=",
+        _ => throw new CodeGenException($"Unsupported operator '{methodName}'."),
+    };
 
     private static PropertyInfo? FindIndexer(Type type) =>
         type.GetProperties(BindingFlags.Public | BindingFlags.Instance)

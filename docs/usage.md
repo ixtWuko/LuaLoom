@@ -100,6 +100,11 @@ local f = lua_loom_generic(CS.MyGame.Utils, 'Convert', CS.System.Int32)
 local ok, value = CS.MyGame.Parsing.TryParse('42')  -- 返回值 + out
 local next = CS.MyGame.Parsing.Bump(1)               -- ref 写回
 local text = CS.MyGame.Parsing.Join('-', 1, 2, 3)    -- params 展开
+
+local t = typeof(CS.MyGame.Player)                    -- Type 对象
+local same = cast(p, t)                               -- 类型视图
+local max = uint64.parse('18446744073709551615')      -- 无符号 64 位
+local box = xlua.get_generic_method(CS.MyGame.Utils, 'Convert')
 ```
 
 生成绑定覆盖热点成员、单方法的 `ref`/`out`/`params`、默认值参数以及受支持元素类型的一维数组；未生成的成员（包括事件、未配置基类、复杂重载组、类元素数组）会自动回落到反射。绑定自己返回 `nil` 的成员不会被误判为「未处理」。派生类只生成自身成员；基类也需要加入 `luaCallCSharp` 才会生成继承成员。非字符串键索引器由生成绑定优先处理。扩展方法所在的静态类需要加入 `luaCallCSharp`，生成的注册代码会调用 `RegisterExtensionType`；未配置的扩展方法不可见。

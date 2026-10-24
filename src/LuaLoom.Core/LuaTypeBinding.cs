@@ -46,4 +46,7 @@ public sealed class LuaTypeBinding
     /// 压入 <c>nil</c> 并返回 1 表示未处理。
     /// </summary>
     public LuaCSFunction? InstanceIndexerSet { get; init; }
+
+    /// <summary>按 Lua 元方法名（如 <c>__add</c>）提供的生成操作符实现。</summary>
+    public IReadOnlyDictionary<string, LuaCSFunction>? Operators { get; init; }
 }

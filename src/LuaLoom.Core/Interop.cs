@@ -35,6 +35,13 @@ internal static class Interop
         end
 
         CS = setmetatable({}, mt)
+
+        xlua = xlua or {}
+        function xlua.get_generic_method(type, name)
+            return function(...)
+                return lua_loom_generic(type, name, ...)
+            end
+        end
         """;
 
     private static readonly ConcurrentDictionary<IntPtr, LuaEnv> Environments = new();
@@ -73,12 +80,27 @@ internal static class Interop
     private static readonly LuaCSFunction StaticMethodCallback = OnStaticMethod;
     private static readonly LuaCSFunction InstanceMethodCallback = OnInstanceMethod;
 
+    private static readonly LuaCSFunction TypeOfCallback = OnTypeOf;
+    private static readonly LuaCSFunction CastCallback = OnCast;
+    private static readonly LuaCSFunction UInt64ToStringCallback = OnUInt64ToString;
+    private static readonly LuaCSFunction UInt64DivideCallback = OnUInt64Divide;
+    private static readonly LuaCSFunction UInt64CompareCallback = OnUInt64Compare;
+    private static readonly LuaCSFunction UInt64RemainderCallback = OnUInt64Remainder;
+    private static readonly LuaCSFunction UInt64ParseCallback = OnUInt64Parse;
+
     private static readonly IntPtr TypePointer = NativeMarshal.GetFunctionPointerForDelegate(TypeCallback);
     private static readonly IntPtr ConstructPointer = NativeMarshal.GetFunctionPointerForDelegate(ConstructCallback);
     private static readonly IntPtr StaticIndexPointer = NativeMarshal.GetFunctionPointerForDelegate(StaticIndexCallback);
     private static readonly IntPtr StaticSetPointer = NativeMarshal.GetFunctionPointerForDelegate(StaticSetCallback);
     private static readonly IntPtr StaticMethodPointer = NativeMarshal.GetFunctionPointerForDelegate(StaticMethodCallback);
     private static readonly IntPtr InstanceMethodPointer = NativeMarshal.GetFunctionPointerForDelegate(InstanceMethodCallback);
+    private static readonly IntPtr TypeOfPointer = NativeMarshal.GetFunctionPointerForDelegate(TypeOfCallback);
+    private static readonly IntPtr CastPointer = NativeMarshal.GetFunctionPointerForDelegate(CastCallback);
+    private static readonly IntPtr UInt64ToStringPointer = NativeMarshal.GetFunctionPointerForDelegate(UInt64ToStringCallback);
+    private static readonly IntPtr UInt64DividePointer = NativeMarshal.GetFunctionPointerForDelegate(UInt64DivideCallback);
+    private static readonly IntPtr UInt64ComparePointer = NativeMarshal.GetFunctionPointerForDelegate(UInt64CompareCallback);
+    private static readonly IntPtr UInt64RemainderPointer = NativeMarshal.GetFunctionPointerForDelegate(UInt64RemainderCallback);
+    private static readonly IntPtr UInt64ParsePointer = NativeMarshal.GetFunctionPointerForDelegate(UInt64ParseCallback);
 
     static Interop()
     {
@@ -100,6 +122,12 @@ internal static class Interop
         LuaApi.lua_setglobal(state, "lua_loom_type");
         LuaApi.lua_pushcclosure(state, GenericFactoryPointer, 0);
         LuaApi.lua_setglobal(state, "lua_loom_generic");
+
+        LuaApi.lua_pushcclosure(state, TypeOfPointer, 0);
+        LuaApi.lua_setglobal(state, "typeof");
+        LuaApi.lua_pushcclosure(state, CastPointer, 0);
+        LuaApi.lua_setglobal(state, "cast");
+        CreateUInt64Table(state);
 
         environment.DoString(Bootstrap, "=lua_loom_cs");
     }
@@ -147,6 +175,128 @@ internal static class Interop
 
         return null;
     }
+
+    private static void CreateUInt64Table(IntPtr state)
+    {
+        LuaApi.lua_createtable(state, 0, 5);
+
+        LuaApi.lua_pushcclosure(state, UInt64ToStringPointer, 0);
+        LuaApi.lua_setfield(state, -2, "tostring");
+        LuaApi.lua_pushcclosure(state, UInt64DividePointer, 0);
+        LuaApi.lua_setfield(state, -2, "divide");
+        LuaApi.lua_pushcclosure(state, UInt64ComparePointer, 0);
+        LuaApi.lua_setfield(state, -2, "compare");
+        LuaApi.lua_pushcclosure(state, UInt64RemainderPointer, 0);
+        LuaApi.lua_setfield(state, -2, "remainder");
+        LuaApi.lua_pushcclosure(state, UInt64ParsePointer, 0);
+        LuaApi.lua_setfield(state, -2, "parse");
+
+        LuaApi.lua_setglobal(state, "uint64");
+    }
+
+    private static int OnTypeOf(IntPtr state) => Guarded(state, static s =>
+    {
+        var environment = GetEnvironment(s);
+        Type? type = null;
+
+        if (LuaApi.lua_type(s, 1) == LuaApi.LuaTUserData)
+        {
+            var value = environment.Marshal.GetObjectFromUserdata(1);
+            type = value as Type ?? value?.GetType();
+        }
+
+        type ??= ResolveType(ReadTypeName(s, 1))
+            ?? throw new InvalidOperationException("Type not found.");
+
+        environment.Marshal.PushObject(type);
+        return 1;
+    });
+
+    private static int OnCast(IntPtr state) => Guarded(state, static s =>
+    {
+        var environment = GetEnvironment(s);
+        var instance = environment.Marshal.GetObjectFromUserdata(1)
+            ?? throw new InvalidOperationException("Lua value is not a C# object.");
+        var type = ResolveTypeArgument(environment, s, 2);
+
+        if (!type.IsInstanceOfType(instance))
+        {
+            throw new InvalidCastException(
+                $"Cannot cast '{instance.GetType().FullName}' to '{type.FullName}'.");
+        }
+
+        environment.Marshal.PushObject(instance);
+        return 1;
+    });
+
+    private static int OnUInt64ToString(IntPtr state) => Guarded(state, static s =>
+    {
+        LuaApi.lua_pushstring(s, ReadUInt64(s, 1).ToString(CultureInfo.InvariantCulture));
+        return 1;
+    });
+
+    private static int OnUInt64Divide(IntPtr state) => Guarded(state, static s =>
+    {
+        var divisor = ReadUInt64(s, 2);
+        if (divisor == 0)
+        {
+            throw new DivideByZeroException("uint64 division by zero.");
+        }
+
+        PushUInt64(s, ReadUInt64(s, 1) / divisor);
+        return 1;
+    });
+
+    private static int OnUInt64Compare(IntPtr state) => Guarded(state, static s =>
+    {
+        var left = ReadUInt64(s, 1);
+        var right = ReadUInt64(s, 2);
+        LuaApi.lua_pushinteger(s, left < right ? -1 : left > right ? 1 : 0);
+        return 1;
+    });
+
+    private static int OnUInt64Remainder(IntPtr state) => Guarded(state, static s =>
+    {
+        var divisor = ReadUInt64(s, 2);
+        if (divisor == 0)
+        {
+            throw new DivideByZeroException("uint64 remainder by zero.");
+        }
+
+        PushUInt64(s, ReadUInt64(s, 1) % divisor);
+        return 1;
+    });
+
+    private static int OnUInt64Parse(IntPtr state) => Guarded(state, static s =>
+    {
+        var text = ReadString(s, 1);
+        if (!ulong.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
+        {
+            throw new FormatException($"Cannot parse '{text}' as uint64.");
+        }
+
+        PushUInt64(s, value);
+        return 1;
+    });
+
+    private static ulong ReadUInt64(IntPtr state, int index)
+    {
+        if (LuaApi.lua_type(state, index) != LuaApi.LuaTNumber)
+        {
+            throw new ArgumentException("Expected an integer.");
+        }
+
+        var value = LuaApi.lua_tointegerx(state, index, out var isInteger);
+        if (isInteger == 0)
+        {
+            throw new ArgumentException("Expected an integer.");
+        }
+
+        return unchecked((ulong)value);
+    }
+
+    private static void PushUInt64(IntPtr state, ulong value) =>
+        LuaApi.lua_pushinteger(state, unchecked((long)value));
 
     private static int OnType(IntPtr state) => Guarded(state, static s =>
     {
@@ -471,6 +621,13 @@ internal static class Interop
             return 1;
         }
 
+        if (environment.TryGetTypeBinding(left.GetType(), out var operatorBinding)
+            && operatorBinding.Operators is { } operators
+            && operators.TryGetValue(methodName, out var generated))
+        {
+            return generated(s);
+        }
+
         var type = left.GetType();
         var isUnary = methodName == "op_UnaryNegation";
         var parameterCount = isUnary ? 1 : argumentCount;
@@ -706,6 +863,18 @@ internal static class Interop
             return PushReturnAndByRefResults(environment, method, result, arguments);
         }
     });
+
+    private static Type ResolveTypeArgument(LuaEnv environment, IntPtr state, int index)
+    {
+        if (LuaApi.lua_type(state, index) == LuaApi.LuaTUserData
+            && environment.Marshal.GetObjectFromUserdata(index) is Type type)
+        {
+            return type;
+        }
+
+        return ResolveType(ReadTypeName(state, index))
+            ?? throw new InvalidOperationException("Type not found.");
+    }
 
     private static string ReadTypeName(IntPtr state, int index)
     {
