@@ -9,6 +9,7 @@
 - 宿主启动：`new LuaEnv(options)` 得到一个可执行 Lua（版本由构建决定）的环境，`package.path` 已按选项初始化。
 - 加载脚本：`AddLoader` 注册自定义读取逻辑，`DoString("require 'main'")` 拉起业务入口。
 - 运行期：周期性调用 `Tick()`，处理重入场景下不能立即释放的句柄。
+- 协程：Lua 函数用 `coroutine.yield` 分段执行，C# 用 `CreateCoroutine()` / `Resume()` 控制推进节奏。
 - 退出：`Dispose()` 关闭虚拟机，之后所有调用抛 `ObjectDisposedException`。
 
 **边界**
@@ -29,13 +30,14 @@
 | E7 | 子线程调用任一公共成员抛 `InvalidOperationException` | 跨线程测试 |
 | E8 | 重复 `Dispose` 不抛异常 | 连调两次 |
 | E9 | 重入的 `Dispose` 延迟到 `Tick()` 执行，句柄最终被回收 | 回调里释放句柄，Tick 后查引用计数 |
+| E10 | `CreateCoroutine()` 返回可推进的协程句柄；`Resume` 传入参数并返回 `yield`/`return` 的值 | 两次 `Resume` 的返回值与状态变化 |
+| E11 | 协程结束或内部报错后状态为 `Dead`；再次 `Resume` 抛 `InvalidOperationException`，内部错误抛 `LuaException` | 分别断言 |
 
 **非目标**
 
 - 多虚拟机共享编译器缓存或共享 registry。
 - 脚本加密与签名（不在基线）。
-
-协程调度由 [F001](features/F001-coroutine-bridge.md) 提供，不属于本模块的初始化职责。
+- C# 侧 `yield`、跨环境协程、与 `Task` 自动互转。
 
 ## 使用与交互设计
 
@@ -70,9 +72,30 @@ public sealed record LuaEnvOptions
 }
 
 public delegate byte[]? ScriptLoader(ref string moduleName);
+
+public sealed class LuaCoroutine : LuaReference
+{
+    public LuaCoroutineStatus Status { get; }
+    public object[] Resume(params object[] args);
+}
+
+public enum LuaCoroutineStatus { Suspended, Dead }
 ```
 
-`LuaTable`/`LuaFunction` 的类型定义在 M002，`LuaEnv` 只返回句柄，不重复定义。
+`LuaTable`/`LuaFunction` 的类型定义在 M002，`LuaEnv` 只返回句柄，不重复定义。`LuaFunction.CreateCoroutine()` 创建协程，句柄生命周期规则与 M002 的 `LuaReference` 一致。
+
+```csharp
+using var function = (LuaFunction)env.DoString("""
+    return function(a)
+        local b = coroutine.yield(a + 1)
+        return b * 2
+    end
+    """)[0]!;
+
+using var coroutine = function.CreateCoroutine();
+var first = coroutine.Resume(1);     // [2], Suspended
+var second = coroutine.Resume(5);    // [10], Dead
+```
 
 **调用顺序**
 
@@ -146,13 +169,21 @@ update(0.016);
 
 **线程约束**：公共成员入口统一走 `EnsureThread()`，比较 `Environment.CurrentManagedThreadId`，不一致抛 `InvalidOperationException`；`CheckThreadAffinity=false` 时跳过检查但不保证安全。
 
-**复杂度**：初始化 O(1)（不含库内部）；`DoString` O(脚本)；`Tick` O(待释放数量)。
+**协程桥接**
+
+- `LuaCoroutine` 持有 `lua_newthread` 创建的 `lua_State*` 与注册表引用；创建时把函数从主线程 `lua_xmove` 到协程栈。
+- `Resume`：主线程压入协程与参数 → `lua_xmove` 到协程 → `lua_resume`（版本差异由 `LuaRuntimeProfile.Resume` 收敛）→ 结果移回主线程 → 按 M002 规则转成 `object[]`。
+- 协程 `return` 后状态为 `Dead`；再次 `Resume` 抛 `InvalidOperationException`。协程内错误从协程栈读取错误对象，抛 `LuaException`，状态变为 `Dead`。
+- `Dispose` 释放协程引用，重复释放无副作用；所有栈操作仍在主线程的 `LuaStackGuard` 内完成。
+
+**复杂度**：初始化 O(1)（不含库内部）；`DoString` O(脚本)；`Tick` O(待释放数量)；`Resume` O(本次推进的脚本量)。
 
 **接口契约与错误传播**
 
 - `DoString` 永不返回 `null`，无返回值时返回 `Array.Empty<object>()`。
 - 原生错误码统一转成 `LuaException`；其余异常（loader 抛出、参数校验失败）原样向上传播，不二次包装。
 - loader 抛出的异常不被吞，直接中止 `require` 并向上传播。
+- 协程句柄遵循单线程约束；对已结束的协程再次 `Resume` 抛 `InvalidOperationException`，协程内脚本错误抛 `LuaException`，已释放句柄抛 `ObjectDisposedException`。
 
 ## 测试方案
 
@@ -170,5 +201,10 @@ update(0.016);
 | 连续两次 `Dispose` | 调用 | 第二次无操作、不抛异常 |
 | C# 回调中 `Dispose` 一个表 | 随后 `Tick` | 引用计数归零，无泄漏 |
 | 循环分配 10 万个表后释放 | 查询 `MemoryBytes` | 数值回落，不持续增长 |
+| 带一次 `yield` 的函数 | 两次 `Resume` | `[2]` 后 `[10]`，状态从 `Suspended` 到 `Dead` |
+| 立即 `return` 的函数 | 再 `Resume` | 抛 `InvalidOperationException` |
+| 协程内 `error('coroutine boom')` | `Resume` | 抛 `LuaException`，消息含 `coroutine boom` |
+| 已 `Dispose` 的协程 | `Resume` | 抛 `ObjectDisposedException` |
+| 连续两次 `Dispose` 协程 | 调用 | 第二次无操作、不抛异常 |
 
 异常覆盖四类：空与边界（空脚本、空返回值、`nil` 错误对象）、非法输入（语法错误、缺失模块）、依赖失败（loader 抛异常、DLL 缺失）、重复与并发（重复 `Dispose`、跨线程调用、回调内释放）。

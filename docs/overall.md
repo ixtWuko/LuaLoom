@@ -141,7 +141,6 @@ Interop        句柄方法补全（Cast）、DelegateBridge、InterfaceBridge�
 │   ├── overall.md              # 本文
 │   ├── usage.md                # 面向使用者的 API 说明
 │   ├── modules/                # M001–M006 模块文档
-│   ├── features/               # 后续需求，编号 F001 起
 │   └── oneoff/                 # 构建、发布等横切事项
 ├── native/
 │   └── CMakeLists.txt          # 按版本编译为 lualoom.dll

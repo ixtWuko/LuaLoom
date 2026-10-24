@@ -8,6 +8,8 @@
 
 - 宿主进程启动时创建虚拟机（由 M003 触发），本模块先解析原生库位置并加载，再提供后续一切 `lua_*` 调用。
 - 任意一次托管代码进入 Lua 或从 Lua 回到托管代码，本模块保证函数返回时栈顶与进入时一致。
+- 构建期在 Lua 5.4.9 与 5.3.6 之间二选一；两个版本共用同一套源码与托管 API，不在一进程内混用。
+- 原生库按 RID 组织，Windows x64、Linux x64、macOS arm64 使用同一套加载逻辑。
 
 **边界**
 
@@ -25,11 +27,16 @@
 | E3 | 守卫体内抛托管异常，栈仍恢复 | 故意抛异常后比较 `lua_gettop` |
 | E4 | `lua_pcallk` 返回非 `Ok` 时抛 `LuaException`，消息含状态码与错误文本 | 加载 `error('boom')` 后调用断言 |
 | E5 | 同一进程内重复加载原生库不重复 `LoadLibrary` | 断言 `ILibraryLoader.Load` 调用次数为 1 |
+| E6 | `-p:LuaVersion=53` 使用 5.3.6 原生库构建，同一组用例通过 | 检查 `LuaApi.Profile.Version` 与测试结果 |
+| E7 | 加载器按当前 RID 查找 `artifacts/native/<rid>/` 与 `runtimes/<rid>/native/` | 三个平台 CI 均能创建 `LuaEnv` |
+| E8 | 当前 RID 缺库时异常列出所有尝试路径 | `LuaLibraryNotFoundException.AttemptedPaths` |
 
 **非目标**
 
 - 动态符号查找、按需 `GetProcAddress`（P/Invoke 由运行时代劳）。
-- 跨平台库名映射（P0 只支持 Windows x64，表结构预留 `PlatformLibraryName`）。
+- Windows arm64、Linux arm64、iOS / Android / WebGL；LuaJIT。
+- 同一进程同时加载两个 Lua 版本；NuGet 打包与发布。
+- macOS 代码签名与公证。
 
 ## 使用与交互设计
 
@@ -94,6 +101,49 @@ panic 不在本模块处理：注册托管 panic 回调意味着异常可能穿�
 3. 错误转换：`pcall` 封装读取返回值，非 `Ok` 时从栈顶取错误对象，按 `LuaType` 转成字符串，抛 `LuaException(status, message)`，并把错误对象弹出栈。
 4. 版本画像：`LuaRuntimeProfile` 提供 `RegistryIndex`、`NewUserdata`、`Resume` 三个入口；`Lua53Profile` 与 `Lua54Profile` 分别绑定各自的原生声明，构建时通过程序集元数据选定。
 
+**版本变体**
+
+| 版本 | 构建属性 | 状态 |
+| :-- | :-- | :-- |
+| Lua 5.4.9 | 默认或 `54` | 已验证 |
+| Lua 5.3.6 | `53` | 已验证 |
+| Lua 5.5.x | `55` | 仅预留画像，未验证 |
+
+```powershell
+# 5.4（默认）
+pwsh scripts/ci.ps1
+
+# 5.3
+pwsh scripts/ci.ps1 -Version 53
+```
+
+- 两个版本各自产出独立的原生库与托管构建，同一进程不能混用。
+- 版本差异收敛在 `LuaRuntimeProfile`：
+
+| Profile | 创建 userdata | 注册表伪索引 | 协程恢复 |
+| :-- | :-- | :-- | :-- |
+| `Lua53Profile` | `lua_newuserdata` | `-1001000` | `lua_resume(L, from, narg)` |
+| `Lua54Profile` | `lua_newuserdatauv` | `-1001000` | `lua_resume` 多一个结果数出参 |
+| `Lua55Profile` | `lua_newuserdatauv` | `-(INT_MAX/2 + 1000)` | 同 5.4 |
+
+- 版本表在 `scripts/lua-versions.json`，`fetch-lua.ps1` 按表下载并校验 SHA-256，`build-native.ps1` 用独立构建目录；CMake 接收 `LUA_VERSION`，5.3 额外包含 `lbitlib.c`。
+- 不引入 `LUA_VERSION_53` 这类条件编译，也不在业务代码里写版本判断。
+- 接受不抹平的脚本语义差异：5.3 没有 `<close>`、`coroutine.close`、generational GC、table `__gc`。
+
+**平台与 RID 分发**
+
+| 平台 | RID | 原生库 |
+| :-- | :-- | :-- |
+| Windows x64 | `win-x64` | `artifacts/native/win-x64/lualoom.dll` |
+| Linux x64 | `linux-x64` | `artifacts/native/linux-x64/liblualoom.so` |
+| macOS arm64 | `osx-arm64` | `artifacts/native/osx-arm64/liblualoom.dylib` |
+
+- 加载顺序见算法第 1 条；`RuntimeInformation.RuntimeIdentifier` 决定优先查找的 RID 目录。
+- `LuaLoom.Native.csproj` 把当前 RID 的原生库复制到输出目录，`LuaNativeRid` 可由 MSBuild 属性覆盖，便于交叉构建。
+- CMake 统一目标名 `lualoom`，Unix 自动加 `lib` 前缀与 `.so`/`.dylib` 后缀，启用 `POSITION_INDEPENDENT_CODE`，`LUA_BUILD_AS_DLL` 只在 Windows 定义。
+- GitHub Actions 矩阵覆盖 `windows-latest`、`ubuntu-22.04`、`macos-14`，分别执行原生构建、编译、测试、生成物检查与示例。
+- 限制：Linux 产物最低 glibc 2.35；macOS `.dylib` 未签名；arm64 Windows/Linux 与移动端未覆盖。
+
 **复杂度**：加载 O(1)（进程内缓存）；守卫 O(1)；`pcall` 封装 O(1)。
 
 **接口契约与错误传播**
@@ -119,5 +169,10 @@ panic 不在本模块处理：注册托管 panic 回调意味着异常可能穿�
 | 语法错误 `"local = 1"` | `luaL_loadbufferx` | 返回 `ErrSyntax`，错误文本含行号 |
 | 运行时错误 `"error('boom')"` | 加载后调 `lua_pcallk` 封装 | 返回 `ErrRun`，错误对象转成 `LuaException`，消息含 `boom` |
 | 连续两次 `Load("lualoom")` | 观察 loader | 底层只加载一次，返回同一句柄 |
+| Lua 5.3 构建 | `-p:LuaVersion=53` + 5.3 原生库 | 同一组用例通过，`Profile.Version` 为 `53` |
+| 5.3 下协程 / 对象 userdata / 零 GC struct | 对应用例 | 与 5.4 行为一致 |
+| Windows x64 / Linux x64 / macOS arm64 | CI 构建并运行 | 各自加载对应 RID 的库并通过 |
+| 删除当前 RID 的原生库 | 创建 `LuaEnv` | 抛 `LuaLibraryNotFoundException`，路径含 `runtimes/<rid>/native` |
+| 切换 Lua 版本 | `-Version 53` + `-p:LuaVersion=53` | RID 目录结构不变，仅库内容变化 |
 
 异常覆盖四类：空与边界（空状态、栈顶 0）、非法输入（错误库名、语法错误）、依赖失败（DLL 缺失、错误码非 `Ok`）、重复与并发（重复加载、嵌套守卫、异常路径恢复）。

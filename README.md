@@ -188,7 +188,6 @@ pwsh scripts/ci.ps1 -Version 53  # Lua 5.3
 - [使用说明](docs/usage.md)
 - [总体设计](docs/overall.md)
 - 模块文档：`docs/modules/M001`–`M006`
-- 后续需求：`docs/features/`（已交付条目已并入模块文档）
 
 ## 相关项目
 
