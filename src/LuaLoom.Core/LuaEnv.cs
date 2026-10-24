@@ -116,7 +116,7 @@ public sealed partial class LuaEnv : IDisposable
         _loaders.Add(loader);
     }
 
-    public object[] DoString(string chunk, string chunkName = "chunk")
+    public object[] DoString(string chunk, string chunkName = "chunk", LuaTable? env = null)
     {
         EnsureReady();
         ArgumentNullException.ThrowIfNull(chunk);
@@ -125,6 +125,7 @@ public sealed partial class LuaEnv : IDisposable
         var baseTop = LuaApi.lua_gettop(_state);
         var errorIndex = PushErrorHandler();
         LoadChunk(chunk, chunkName);
+        SetEnvironment(env);
 
         var status = LuaApi.lua_pcallk(
             _state,
@@ -149,7 +150,7 @@ public sealed partial class LuaEnv : IDisposable
         return results;
     }
 
-    public LuaFunction LoadString(string chunk, string chunkName = "chunk")
+    public LuaFunction LoadString(string chunk, string chunkName = "chunk", LuaTable? env = null)
     {
         EnsureReady();
         ArgumentNullException.ThrowIfNull(chunk);
@@ -157,7 +158,37 @@ public sealed partial class LuaEnv : IDisposable
         using var guard = LuaStackGuard.Enter(_state);
         PushErrorHandler();
         LoadChunk(chunk, chunkName);
+        SetEnvironment(env);
         return _marshal.CreateFunction(-1);
+    }
+
+    public T LoadString<T>(string chunk, string chunkName = "chunk", LuaTable? env = null)
+        where T : class
+    {
+        var function = LoadString(chunk, chunkName, env);
+        if (typeof(T) == typeof(LuaFunction))
+        {
+            return (T)(object)function;
+        }
+
+        using (function)
+        {
+            var results = function.Call();
+            if (results.Length > 0 && results[0] is LuaFunction nested)
+            {
+                using (nested)
+                {
+                    return _marshal.ReadReference<T>(nested.Id);
+                }
+            }
+
+            if (results.Length > 0 && results[0] is T value)
+            {
+                return value;
+            }
+
+            return _marshal.ReadReference<T>(function.Id);
+        }
     }
 
     public LuaTable NewTable(int arraySize = 0, int recordSize = 0)
@@ -297,6 +328,26 @@ public sealed partial class LuaEnv : IDisposable
     {
         LuaApi.lua_rawgeti(_state, LuaApi.Profile.RegistryIndex, _errorHandlerRef);
         return LuaApi.lua_gettop(_state);
+    }
+
+    private void SetEnvironment(LuaTable? environment)
+    {
+        if (environment is null)
+        {
+            return;
+        }
+
+        if (!ReferenceEquals(environment.Marshal, _marshal))
+        {
+            throw new InvalidOperationException(
+                "Environment table belongs to a different LuaEnv.");
+        }
+
+        environment.EnsureAlive();
+        var functionIndex = LuaApi.lua_gettop(_state);
+        _marshal.PushReference(environment.Id);
+        LuaApi.lua_setupvalue(_state, functionIndex, 1);
+        LuaApi.lua_settop(_state, functionIndex);
     }
 
     private void RegisterErrorHandler(out int reference)

@@ -16,6 +16,24 @@ public sealed class LuaFunction : LuaReference
         return Invoke(args, returnTypes: null);
     }
 
+    public void SetEnv(LuaTable environment)
+    {
+        EnsureAlive();
+        ArgumentNullException.ThrowIfNull(environment);
+        if (!ReferenceEquals(environment.Marshal, Marshal))
+        {
+            throw new InvalidOperationException(
+                "Environment table belongs to a different LuaEnv.");
+        }
+
+        environment.EnsureAlive();
+        var state = Marshal.State;
+        using var guard = LuaStackGuard.Enter(state);
+        Marshal.PushReference(Id);
+        Marshal.PushReference(environment.Id);
+        LuaApi.lua_setupvalue(state, -2, 1);
+    }
+
     public object[] Call(object[] args, Type[] returnTypes)
     {
         ArgumentNullException.ThrowIfNull(returnTypes);

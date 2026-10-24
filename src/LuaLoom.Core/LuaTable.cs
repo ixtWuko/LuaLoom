@@ -63,6 +63,9 @@ public sealed partial class LuaTable : LuaReference
         return Marshal.Read<TValue>(-1);
     }
 
+    public void Get<TKey, TValue>(TKey key, out TValue value) =>
+        value = Get<TKey, TValue>(key);
+
     public void Set<TKey, TValue>(TKey key, TValue value)
     {
         EnsureAlive();

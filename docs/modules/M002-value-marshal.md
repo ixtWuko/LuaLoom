@@ -54,6 +54,7 @@ public sealed partial class LuaTable : LuaReference
     public int Length { get; }
     public T Get<T>(string key);
     public TValue Get<TKey, TValue>(TKey key);
+    public void Get<TKey, TValue>(TKey key, out TValue value);
     public void Set<TKey, TValue>(TKey key, TValue value);
     public T GetInPath<T>(string path);
     public void SetInPath<T>(string path, T value);
@@ -63,6 +64,7 @@ public sealed class LuaFunction : LuaReference
 {
     public object[] Call(params object[] args);
     public object[] Call(object[] args, Type[] returnTypes);
+    public void SetEnv(LuaTable environment);
 }
 ```
 

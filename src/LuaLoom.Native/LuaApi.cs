@@ -136,6 +136,9 @@ internal static class LuaApi
     internal static extern int luaL_loadbufferx(IntPtr L, byte[] buffer, nuint size, string chunkName, string? mode);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr lua_setupvalue(IntPtr L, int funcindex, int n);
+
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void luaL_traceback(IntPtr L, IntPtr levelState, string? message, int level);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]

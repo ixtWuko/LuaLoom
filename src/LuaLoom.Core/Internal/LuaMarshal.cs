@@ -118,6 +118,15 @@ internal sealed class LuaMarshal : IDisposable
         LuaApi.lua_rawgeti(_state, LuaApi.Profile.RegistryIndex, id);
     }
 
+    public T ReadReference<T>(int id)
+    {
+        PushReference(id);
+        var index = LuaApi.lua_gettop(_state);
+        var value = Read<T>(index);
+        LuaApi.lua_settop(_state, index - 1);
+        return value;
+    }
+
     public LuaTable CreateTable(int arraySize = 0, int recordSize = 0)
     {
         LuaApi.lua_createtable(_state, arraySize, recordSize);

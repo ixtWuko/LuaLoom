@@ -53,8 +53,9 @@ public sealed partial class LuaEnv : IDisposable
     internal IntPtr Handle { get; }
     public long MemoryBytes { get; }
     public void AddLoader(ScriptLoader loader);
-    public object[] DoString(string chunk, string chunkName = "chunk");
-    public LuaFunction LoadString(string chunk, string chunkName = "chunk");
+    public object[] DoString(string chunk, string chunkName = "chunk", LuaTable? env = null);
+    public LuaFunction LoadString(string chunk, string chunkName = "chunk", LuaTable? env = null);
+    public T LoadString<T>(string chunk, string chunkName = "chunk", LuaTable? env = null) where T : class;
     public LuaTable NewTable(int arraySize = 0, int recordSize = 0);
     public void RegisterMarshaler(ITypeMarshaler marshaler);
     public void Tick();
