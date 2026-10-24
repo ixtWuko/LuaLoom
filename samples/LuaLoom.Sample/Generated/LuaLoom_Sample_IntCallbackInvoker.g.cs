@@ -7,6 +7,11 @@ internal sealed class LuaLoom_Sample_IntCallbackInvoker : global::LuaLoom.ILuaDe
 {
     public global::System.Delegate Create(global::LuaLoom.LuaFunction function)
     {
-        return new global::LuaLoom.Sample.IntCallback((a0) => checked((int)(long)function.Call(a0)[0]));
+        return new global::LuaLoom.Sample.IntCallback((int a0) =>
+        {
+            var results = function.Call(a0);
+            var result = global::LuaLoom.LuaBinding.ConvertObject<int>(results[0]);
+            return result;
+        });
     }
 }

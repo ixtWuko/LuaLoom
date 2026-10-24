@@ -34,6 +34,9 @@ public sealed class CodeGenTests
             "LuaLoom.UnitTests.Sample.IntOp",
             "LuaLoom.UnitTests.Sample.ICalculator",
             "LuaLoom.UnitTests.Sample.IArrayCalculator",
+            "LuaLoom.UnitTests.Sample.ParseOp",
+            "LuaLoom.UnitTests.Sample.ParamsOp",
+            "LuaLoom.UnitTests.Sample.ArrayOp",
             "System.Action<int>",
             "System.Func<int, string>",
             "LuaLoom.UnitTests.Sample.Mapper<int, string>",
@@ -58,6 +61,9 @@ public sealed class CodeGenTests
         Assert.Contains("LuaLoom_UnitTests_Sample_EmitterBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_DecimalMethodsBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_IntOpInvoker.g.cs", names);
+        Assert.Contains("LuaLoom_UnitTests_Sample_ParseOpInvoker.g.cs", names);
+        Assert.Contains("LuaLoom_UnitTests_Sample_ParamsOpInvoker.g.cs", names);
+        Assert.Contains("LuaLoom_UnitTests_Sample_ArrayOpInvoker.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_ICalculatorImpl.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_IArrayCalculatorImpl.g.cs", names);
         Assert.Contains("System_Action_int_Invoker.g.cs", names);

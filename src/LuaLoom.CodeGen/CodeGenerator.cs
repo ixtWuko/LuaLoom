@@ -1381,11 +1381,6 @@ public static class CodeGenerator
             ?? throw new CodeGenException($"Delegate '{type.FullName}' has no Invoke method.");
 
         var parameters = invoke.GetParameters();
-        if (parameters.Any(static p => p.ParameterType.IsByRef))
-        {
-            throw new CodeGenException($"Delegate '{type.FullName}' has by-ref parameters, which are not supported.");
-        }
-
         var builder = new StringBuilder();
         WriteHeader(builder, config.Namespace);
         builder.AppendLine($"internal sealed class {invoker} : global::LuaLoom.ILuaDelegateInvoker");
@@ -1393,22 +1388,69 @@ public static class CodeGenerator
         builder.AppendLine("    public global::System.Delegate Create(global::LuaLoom.LuaFunction function)");
         builder.AppendLine("    {");
 
-        var argumentNames = Enumerable.Range(0, parameters.Length).Select(static i => "a" + i).ToArray();
-        var call = $"function.Call({string.Join(", ", argumentNames)})";
+        var signature = string.Join(
+            ", ",
+            parameters.Select(static (p, i) => DelegateParameterSignature(p, i)));
+        var hasComplex = parameters.Any(static p =>
+            p.ParameterType.IsByRef || IsParamArray(p));
 
-        if (Is(invoke.ReturnType, typeof(void)))
+        builder.AppendLine($"        return new {TypeRef(type)}(({signature}) =>");
+        builder.AppendLine("        {");
+
+        if (hasComplex)
         {
-            builder.AppendLine($"        return new {TypeRef(type)}(({string.Join(", ", argumentNames)}) =>");
-            builder.AppendLine("        {");
-            builder.AppendLine($"            {call};");
-            builder.AppendLine("        });");
+            builder.AppendLine("            var args = new global::System.Collections.Generic.List<object?>();");
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                var parameter = parameters[i];
+                if (parameter.IsOut)
+                {
+                    continue;
+                }
+
+                if (IsParamArray(parameter))
+                {
+                    builder.AppendLine($"            foreach (var item in a{i}) args.Add(item);");
+                }
+                else
+                {
+                    builder.AppendLine($"            args.Add(a{i});");
+                }
+            }
+
+            builder.AppendLine("            var results = function.Call(args.ToArray());");
         }
         else
         {
-            builder.AppendLine(
-                $"        return new {TypeRef(type)}(({string.Join(", ", argumentNames)}) => {ConvertResult(invoke.ReturnType, call)});");
+            var arguments = string.Join(", ", Enumerable.Range(0, parameters.Length).Select(static i => "a" + i));
+            builder.AppendLine($"            var results = function.Call({arguments});");
         }
 
+        var resultIndex = 0;
+        if (!Is(invoke.ReturnType, typeof(void)))
+        {
+            builder.AppendLine(
+                $"            var result = global::LuaLoom.LuaBinding.ConvertObject<{TypeRef(invoke.ReturnType)}>(results[{resultIndex++}]);");
+        }
+
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var parameter = parameters[i];
+            if (!parameter.ParameterType.IsByRef || (parameter.IsIn && !parameter.IsOut))
+            {
+                continue;
+            }
+
+            builder.AppendLine(
+                $"            a{i} = global::LuaLoom.LuaBinding.ConvertObject<{TypeRef(parameter.ParameterType.GetElementType()!)}>(results[{resultIndex++}]);");
+        }
+
+        if (!Is(invoke.ReturnType, typeof(void)))
+        {
+            builder.AppendLine("            return result;");
+        }
+
+        builder.AppendLine("        });");
         builder.AppendLine("    }");
         builder.AppendLine("}");
         return builder.ToString();
@@ -1820,6 +1862,18 @@ public static class CodeGenerator
         }
 
         return true;
+    }
+
+    private static string DelegateParameterSignature(ParameterInfo parameter, int index)
+    {
+        var name = "a" + index;
+        if (parameter.ParameterType.IsByRef)
+        {
+            var modifier = parameter.IsOut ? "out" : parameter.IsIn ? "in" : "ref";
+            return $"{modifier} {TypeRef(parameter.ParameterType.GetElementType()!)} {name}";
+        }
+
+        return $"{TypeRef(parameter.ParameterType)} {name}";
     }
 
     private static string InterfaceParameterSignature(ParameterInfo parameter)

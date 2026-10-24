@@ -70,6 +70,12 @@ public delegate int IntOp(int a, int b);
 
 public delegate TResult Mapper<in T, out TResult>(T value);
 
+public delegate bool ParseOp(string text, out int value);
+
+public delegate int ParamsOp(int seed, params int[] values);
+
+public delegate int[] ArrayOp(int[] values);
+
 public static class Thrower
 {
     public static void Boom() => throw new InvalidOperationException("boom");
