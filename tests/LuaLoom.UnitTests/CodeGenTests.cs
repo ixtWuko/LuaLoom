@@ -35,6 +35,10 @@ public sealed class CodeGenTests
             "LuaLoom.UnitTests.Sample.InteropHost",
             "LuaLoom.UnitTests.Sample.UnsupportedSurface",
         ],
+        GenericMethods =
+        [
+            "LuaLoom.UnitTests.Sample.Generics.Describe<int>",
+        ],
         CSharpCallLua =
         [
             "LuaLoom.UnitTests.Sample.IntOp",
@@ -72,6 +76,10 @@ public sealed class CodeGenTests
         Assert.Contains("LuaLoom_UnitTests_Sample_ComplexOverloadsBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_UnsupportedSurfaceBinder.g.cs", names);
         Assert.Contains(
+            names,
+            static name => name.StartsWith("LuaLoom_UnitTests_Sample_Generics_Describe_", StringComparison.Ordinal)
+                && name.EndsWith("GenericBinder.g.cs", StringComparison.Ordinal));
+        Assert.Contains(
             result.Coverage,
             static entry => entry.Member.Contains("Generic", StringComparison.Ordinal)
                 && entry.Status == "reflection"
@@ -84,6 +92,9 @@ public sealed class CodeGenTests
         Assert.Contains(
             result.Coverage,
             static entry => entry.Member == "Value" && entry.Status == "generated");
+        Assert.Contains(
+            result.Coverage,
+            static entry => entry.Member == "Describe<Int32>" && entry.Status == "generated");
         Assert.Contains("LuaLoom_UnitTests_Sample_IntOpInvoker.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_ParseOpInvoker.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_ParamsOpInvoker.g.cs", names);
@@ -110,6 +121,10 @@ public sealed class CodeGenTests
         Assert.Contains("typeof(global::System.Action<int>)", bindings.Content, StringComparison.Ordinal);
         Assert.Contains(
             "RegisterExtensionType(typeof(global::LuaLoom.UnitTests.Sample.PlayerExtensions))",
+            bindings.Content,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "RegisterCast(typeof(global::LuaLoom.UnitTests.Sample.Player)",
             bindings.Content,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -342,11 +357,21 @@ public sealed class CodeGenTests
             local generic = { Echo = function(self, value) return value + 1 end }
             local events = { add_Changed = function(self, handler) self.seen = handler(7) end }
             CS.LuaLoom.UnitTests.Sample.InteropHost.Subscribe(events, function(value) return value * 2 end)
+            local players = { CS.LuaLoom.UnitTests.Sample.Player(2), CS.LuaLoom.UnitTests.Sample.Player(3) }
+            local made = CS.LuaLoom.UnitTests.Sample.ArrayMethods.MakePlayers(5)
+            local describe = lua_loom_generic(
+                'LuaLoom.UnitTests.Sample.Generics', 'Describe', 'System.Int32')
+            local matrix = { { 1, 2 }, { 3, 4 } }
+            local madeMatrix = CS.LuaLoom.UnitTests.Sample.ArrayMethods.MakeMatrix(2)
             return p.Hp, p.Name, p:Add(2, 3), p:Add(5),
                    CS.LuaLoom.UnitTests.Sample.Player.Double(6),
                    c:Combo(1), c:Combo(1, 2), c:Combo(1, 'x'),
                    outValue, outExtra, c:RefGroup(2, 3),
-                   f(4), CS.LuaLoom.UnitTests.Sample.InteropHost.Use(generic), events.seen
+                   f(4), CS.LuaLoom.UnitTests.Sample.InteropHost.Use(generic), events.seen,
+                   CS.LuaLoom.UnitTests.Sample.ArrayMethods.SumPlayers(players),
+                   #made, made[2].Hp, describe(5),
+                   CS.LuaLoom.UnitTests.Sample.ArrayMethods.SumMatrix(matrix),
+                   madeMatrix[2][2]
             """);
 
         Assert.Equal(4L, results[0]);
@@ -363,6 +388,17 @@ public sealed class CodeGenTests
         Assert.Equal(12L, results[11]);
         Assert.Equal(6L, results[12]);
         Assert.Equal(14L, results[13]);
+        Assert.Equal(5L, results[14]);
+        Assert.Equal(2L, results[15]);
+        Assert.Equal(6L, results[16]);
+        Assert.Equal("Int32:5", results[17]);
+        Assert.Equal(10L, results[18]);
+        Assert.Equal(5L, results[19]);
+
+        using var castTable = (LuaTable)env.DoString("return { Hp = 8, Name = 'cast' }")[0]!;
+        var castPlayer = castTable.Cast<Player>();
+        Assert.Equal(8, castPlayer.Hp);
+        Assert.Equal("cast", castPlayer.Name);
     }
 
     [Fact]
@@ -542,9 +578,9 @@ public sealed class CodeGenTests
 
         var exception = Assert.Throws<LuaException>(
             () => env.DoString(
-                "return lua_loom_generic('LuaLoom.UnitTests.Sample.Player', 'Missing', 'System.Int32')"));
+                "return lua_loom_generic('LuaLoom.UnitTests.Sample.Player', 'Missing', 'System.Int32')()"));
 
-        Assert.Contains("generic method reflection", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("generic method", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

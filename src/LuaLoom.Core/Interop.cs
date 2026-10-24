@@ -929,8 +929,6 @@ internal static class Interop
 
     private static int OnGenericFactory(IntPtr state) => Guarded(state, static s =>
     {
-        var environment = GetEnvironment(s);
-        ThrowStrict(environment, null, "generic method reflection");
         var typeName = ReadTypeName(s, 1);
         var methodName = ReadString(s, 2);
         var count = LuaApi.lua_gettop(s) - 2;
@@ -967,6 +965,12 @@ internal static class Interop
                 ?? throw new InvalidOperationException($"Generic argument '{typeNames[i]}' not found.");
         }
 
+        if (environment.TryGetGenericMethod(type, methodName, genericArguments, out var generated))
+        {
+            return generated(s);
+        }
+
+        ThrowStrict(environment, type, $"generic method '{type.Name}.{methodName}'");
         var methodFlags = BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance;
         if (environment.IsPrivateAccessible(type))
         {

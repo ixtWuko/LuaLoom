@@ -48,7 +48,7 @@
 | E16 | `out` 不消耗实参、`ref` 消耗实参；生成绑定与反射都按「返回值 → `ref`/`out`」返回 | `TryParse('42')` 返回 `true, 42`；`Bump(1)` 返回 `2` |
 | E17 | `params` 把剩余实参打包成数组，允许 0 个实参；单方法组可由生成绑定处理 | `Join('-', 1, 2, 3)` 与 `Sum()` |
 | E18 | 实例成员未命中时可调用扩展方法，实例作为首参 | `p:Triple(2)` 返回 `p.Hp * 2` |
-| E19 | 一维数组参数/返回值可由生成绑定编解码，元素类型受支持 | `Sum(int[])` 与 `Double(int[])` |
+| E19 | 一维/矩形数组参数/返回值可由生成绑定编解码，元素类型受支持 | `Sum(int[])`、`Double(int[])`、`SumMatrix(int[,])` |
 | E20 | xLua 兼容 API：`typeof`、`cast`、`uint64.*`、`xlua.get_generic_method`、`xlua.private_accessible`、`xlua.structclone` | 对应脚本断言 |
 | E21 | Lua table 作为方法参数时自动转换为 class/struct/interface | `PointMath.Sum({ X = 1, Y = 2 })` |
 | E22 | `decimal` 生成路径按 16 字节 struct userdata 无损传递 | `DecimalMethods.Echo` / `Add` |
@@ -58,7 +58,7 @@
 - 自动同步：`Cast<T>` 是值拷贝，C# 侧修改不回写 Lua 表。
 - 动态类型与 `ExpandoObject` 映射。
 - 自定义集合适配（只支持 `Dictionary`、`List` 与数组）。
-- 泛型方法的直接调用（不在基线，后续按需求评估）。
+- 泛型方法的全组合生成；只有 `genericMethods` 显式列出的闭合实例走生成路径。
 - 生成路径的 `ref`/`out`/`params` thunk（先由反射承担）。
 - 泛型扩展方法与扩展方法组的歧义消解（只取第一个匹配的公开静态方法）。
 
@@ -167,7 +167,7 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 
 **算法**
 
-1. `Cast<T>` 分派：类与 struct 走缓存好的成员赋值表逐项填充；`Dictionary`/`List`/数组走 M002 原语；接口走生成实现类，缺失时用 `DispatchProxy` 兜底。
+1. `Cast<T>` 分派：先查生成器注册的 `RegisterCast` 强类型转换；未命中时类与 struct 走缓存好的成员赋值表逐项填充，`Dictionary`/`List`/数组走 M002 原语；接口走生成实现类，缺失时用 `DispatchProxy` 兜底。
 2. 成员赋值表首次用反射构建，键为 `(Type, 表)`；后续直接调用缓存，不再走反射查找。
 3. delegate 创建：按 delegate 类型查生成的 invoker；未命中抛 `LuaConversionException`，消息提示配置项与重新生成。创建后复用同一引用 id，不重复 `luaL_ref`。反向传入 Lua 的 C# delegate 以对象 userdata 暴露，metatable 的 `__call` 用 `DynamicInvoke` 调用，参数与 `ref`/`out`/`params` 复用同一装配规则。
 4. 接口代理兜底：`DispatchProxy.Create<T, LuaInterfaceProxy>()`；`Invoke` 按方法名查表，参数与返回值走 M002，转换失败抛 `LuaConversionException`。
@@ -179,7 +179,7 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 10. 操作符：实例 metatable 上挂 `__add`/`__sub`/`__mul`/`__div`/`__mod`/`__unm`/`__eq`/`__lt`/`__le`；先查配置类型的生成 `Operators`，未命中再按名称查 `op_*` 静态方法。`__unm` 按 Lua 约定收到两个相同操作数，只取第一个匹配单参数方法；`__eq` 无运算符时退回引用比较。
 11. 索引器：键不是字符串时先查绑定的 `InstanceIndexer`/`InstanceIndexerSet`，未处理再走 `this[...]` 反射；字符串键仍按成员名解析。
 12. 事件：配置类型优先返回生成的订阅 thunk，未生成时回退 `EventInfo` 反射。`('+', fn)` 用生成的委托 lambda 或 `LuaEventDelegateFactory` 包装 Lua 函数，`('-', fn)` 按 `lua_topointer` 找到同一函数对应的委托并移除，随后释放函数句柄。订阅关系存放在 `ConditionalWeakTable`，对象被回收时随之释放。Lua 表实现接口时，生成的接口实现把 `add_<Event>`/`remove_<Event>` 转发给表函数；传给 Lua 的 C# delegate 可通过 `__call` 调用。
-13. 泛型方法：`lua_loom_generic(type, methodName, T1, ...)` 解析泛型定义，按类型参数个数匹配，`MakeGenericMethod` 闭合后返回调用器；静态方法参数从索引 1 开始，实例方法索引 1 是对象、参数从 2 开始。
+13. 泛型方法：`lua_loom_generic(type, methodName, T1, ...)` 解析泛型定义，按类型参数个数匹配；先查生成器注册的闭合实例（`RegisterGenericMethod`），命中直接调用，未命中再 `MakeGenericMethod` 反射闭合；严格模式下未命中直接抛错。静态方法参数从索引 1 开始，实例方法索引 1 是对象、参数从 2 开始。
 14. 扩展方法：实例成员未命中时，先查生成器注册的 `RegisterExtensionMethod` 分派表；未命中再在 `RegisterExtensionType` 注册过的 public static 类中查找 `ExtensionAttribute` 方法。要求首参类型可由实例类型赋值；反射扫描结果按 `(Type, Name)` 缓存。未注册的扩展类不会被扫描或访问。
 15. xLua 兼容 API：`typeof` 返回 `Type` 对象；`cast` 校验对象可赋值后返回同一对象视图；`uint64.*` 用无符号位模式实现解析、比较、除法与取模；`xlua.get_generic_method` 是 `lua_loom_generic` 的 `xlua` 命名空间别名；`xlua.private_accessible` 把类型加入非公共成员可见集合；`xlua.structclone` 复制原始 struct userdata 字节。
 
@@ -189,11 +189,11 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 
 - `Cast<T>` 只做值拷贝，文档与示例中明确标注不回写。
 - 缺失键保留默认值；成员类型不匹配抛 `LuaConversionException`，消息含类型全名与键名。
-- 方法参数为 class/struct/interface 且 Lua 侧给 table 时，按 `LuaTable.Cast<T>` 的规则转换；table 到 `object`/`LuaTable` 不做隐式转换。
+- 方法参数为 class/struct/interface 且 Lua 侧给 table 时，按 `LuaTable.Cast<T>` 的规则转换；矩形数组按嵌套表读取，一维数组元素可以是 class/struct；table 到 `object`/`LuaTable` 不做隐式转换。
 - 生成的 invoker 与 `DispatchProxy` 代理各自做参数转换，规则同源于 M002 的 `Read`/`Push`；两条路径的行为由同一组用例覆盖。
 - 绑定只提供部分 thunk 时（例如没有生成 `__call`），缺失的入口回落到反射实现，不会留下一张调不通的类表。
 - 绑定 thunk 的「未处理」约定：`Call` / `StaticIndex` / `InstanceIndex` 返回 0 且不压栈；`StaticNewIndex` / `InstanceNewIndex` 压入 `nil` 并返回 1。返回值本身是 `nil` 时必须返回 1，否则会被误判为未处理并触发回落。
-- 反射调用按参数形状装配：普通参数与 `ref` 消耗实参，`out` 不消耗，`params` 把剩余实参打包成数组；调用后依次返回方法返回值、`ref` 与 `out`。单方法组由生成绑定执行同一规则；与其他重载混合的复杂组跳过生成，由上述回落路径处理。
+- 反射调用按参数形状装配：普通参数与 `ref` 消耗实参，`out` 不消耗，`params` 把剩余实参打包成数组；调用后依次返回方法返回值、`ref` 与 `out`。生成绑定对单方法与混合重载组都执行同一规则；未配置或无法生成的成员才回落到反射。
 - M005 接入前，`CS.*` 与成员访问全部走反射；`RegisterType` 已就位，生成的绑定在 M005 里优先于反射使用。
 - `LuaInterfaceProxy` 必须是 `public`：`DispatchProxy` 在运行期生成子类，代理类型要能从动态程序集访问；它只作兜底。
 - 事件委托用表达式树现场生成（`LuaEventDelegateFactory`），只服务事件；`Get<TDelegate>` 仍要求生成代码。

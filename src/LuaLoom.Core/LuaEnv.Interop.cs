@@ -9,6 +9,8 @@ public sealed partial class LuaEnv
     private readonly Dictionary<string, LuaTypeBinding> _typeBindingsByName = new(StringComparer.Ordinal);
     private readonly Dictionary<Type, ILuaDelegateInvoker> _delegateBindings = new();
     private readonly Dictionary<Type, Func<LuaTable, object>> _interfaceBindings = new();
+    private readonly Dictionary<Type, Func<LuaTable, object>> _castBindings = new();
+    private readonly Dictionary<(Type Type, string Name), Dictionary<string, LuaCSFunction>> _genericMethods = new();
     private readonly List<Type> _extensionTypes = new();
     private readonly Dictionary<(Type Type, string Name), (bool Found, MethodInfo? Method)> _extensionCache = new();
     private readonly List<(Type Target, string Name, LuaCSFunction Handler)> _extensionMethods = new();
@@ -37,6 +39,57 @@ public sealed partial class LuaEnv
         EnsureReady();
         _interfaceBindings[interfaceType] = factory;
     }
+
+    /// <summary>注册生成的 Lua 表到 C# 对象的转换器。</summary>
+    public void RegisterCast(Type type, Func<LuaTable, object> cast)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        ArgumentNullException.ThrowIfNull(cast);
+        EnsureReady();
+        _castBindings[type] = cast;
+    }
+
+    /// <summary>注册一个已闭合的泛型方法分派入口。</summary>
+    public void RegisterGenericMethod(
+        Type type,
+        string methodName,
+        Type[] typeArguments,
+        LuaCSFunction handler)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        ArgumentException.ThrowIfNullOrEmpty(methodName);
+        ArgumentNullException.ThrowIfNull(typeArguments);
+        ArgumentNullException.ThrowIfNull(handler);
+        EnsureReady();
+
+        var key = (type, methodName);
+        if (!_genericMethods.TryGetValue(key, out var methods))
+        {
+            methods = new Dictionary<string, LuaCSFunction>(StringComparer.Ordinal);
+            _genericMethods[key] = methods;
+        }
+
+        methods[GenericSignature(typeArguments)] = handler;
+    }
+
+    internal bool TryGetGenericMethod(
+        Type type,
+        string methodName,
+        Type[] typeArguments,
+        out LuaCSFunction handler)
+    {
+        if (_genericMethods.TryGetValue((type, methodName), out var methods)
+            && methods.TryGetValue(GenericSignature(typeArguments), out handler!))
+        {
+            return true;
+        }
+
+        handler = null!;
+        return false;
+    }
+
+    private static string GenericSignature(Type[] typeArguments) =>
+        string.Join("|", typeArguments.Select(static t => t.FullName ?? t.Name));
 
     /// <summary>注册一个静态扩展方法类；只有注册过的扩展方法才可见。</summary>
     public void RegisterExtensionType(Type extensionType)
@@ -110,6 +163,9 @@ public sealed partial class LuaEnv
 
     internal bool TryGetInterfaceFactory(Type type, out Func<LuaTable, object> factory) =>
         _interfaceBindings.TryGetValue(type, out factory!);
+
+    internal bool TryGetCast(Type type, out Func<LuaTable, object> cast) =>
+        _castBindings.TryGetValue(type, out cast!);
 
     internal bool TryGetTypeBinding(Type type, out LuaTypeBinding binding) =>
         _typeBindings.TryGetValue(type, out binding!);

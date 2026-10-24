@@ -108,8 +108,22 @@ public static class LuaBinding
         throw new LuaConversionException(typeof(T).Name, value?.GetType().Name ?? "nil", index);
     }
 
-    public static T[] ReadArray<T>(IntPtr state, int index) =>
-        LuaMarshalRegistry.Get(state).ReadArray<T>(index);
+    public static T[] ReadArray<T>(IntPtr state, int index)
+    {
+        var marshal = LuaMarshalRegistry.Get(state);
+        if (IsDirectArrayElement(typeof(T)))
+        {
+            return marshal.ReadArray<T>(index);
+        }
+
+        if (LuaApi.lua_type(state, index) == LuaApi.LuaTTable)
+        {
+            using var table = marshal.CreateTableFrom(index);
+            return table.Cast<T[]>();
+        }
+
+        throw new LuaConversionException($"array of {typeof(T).Name}", "non-table", index);
+    }
 
     public static LuaFunction CreateFunction(IntPtr state, int index) =>
         LuaMarshalRegistry.Get(state).CreateFunction(index);
@@ -118,6 +132,9 @@ public static class LuaBinding
         LuaApi.lua_topointer(state, index);
 
     public static void PushArray<T>(IntPtr state, T[]? values) =>
+        LuaMarshalRegistry.Get(state).PushArray(values);
+
+    public static void PushArray(IntPtr state, Array? values) =>
         LuaMarshalRegistry.Get(state).PushArray(values);
 
     public static bool IsNil(IntPtr state, int index) =>
@@ -158,6 +175,15 @@ public static class LuaBinding
 
     public static void Throw(IntPtr state, string message) =>
         throw new LuaException(LuaStatus.ErrRun, message);
+
+    private static bool IsDirectArrayElement(Type type) =>
+        type.IsPrimitive
+        || type.IsEnum
+        || type == typeof(string)
+        || type == typeof(object)
+        || typeof(LuaReference).IsAssignableFrom(type)
+        || typeof(Delegate).IsAssignableFrom(type)
+        || type.IsInterface;
 
     private static long ReadInteger(IntPtr state, int index)
     {

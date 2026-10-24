@@ -13,6 +13,12 @@ public sealed partial class LuaTable
         EnsureAlive();
         var type = typeof(T);
 
+        if (Marshal.Environment is { } environment
+            && environment.TryGetCast(type, out var generatedCast))
+        {
+            return (T)generatedCast(this);
+        }
+
         if (type.IsInterface)
         {
             return (T)CastInterface(type);
@@ -125,6 +131,11 @@ public sealed partial class LuaTable
 
     private object CastArray(Type type)
     {
+        if (type.GetArrayRank() > 1)
+        {
+            return CastMultiArray(type);
+        }
+
         var elementType = type.GetElementType()!;
         var length = Length;
         var state = Marshal.State;
@@ -173,6 +184,71 @@ public sealed partial class LuaTable
         }
 
         return array;
+    }
+
+    private object CastMultiArray(Type type)
+    {
+        var state = Marshal.State;
+        using var guard = LuaStackGuard.Enter(state);
+        Marshal.PushReference(Id);
+        var table = LuaApi.lua_gettop(state);
+
+        var rank = type.GetArrayRank();
+        var lengths = new int[rank];
+        var current = table;
+        for (var dimension = 0; dimension < rank; dimension++)
+        {
+            lengths[dimension] = checked((int)LuaApi.lua_rawlen(state, current));
+            if (lengths[dimension] == 0 || dimension == rank - 1)
+            {
+                break;
+            }
+
+            LuaApi.lua_rawgeti(state, current, 1);
+            if (LuaApi.lua_type(state, -1) != LuaApi.LuaTTable)
+            {
+                throw new LuaConversionException("array", "non-table", -1);
+            }
+
+            current = LuaApi.lua_gettop(state);
+        }
+
+        var array = Array.CreateInstance(type.GetElementType()!, lengths);
+        FillMultiArray(array, new int[rank], 0, table, lengths);
+        return array;
+    }
+
+    private void FillMultiArray(
+        Array array,
+        int[] indices,
+        int dimension,
+        int table,
+        int[] lengths)
+    {
+        var state = Marshal.State;
+        for (var i = 0; i < lengths[dimension]; i++)
+        {
+            LuaApi.lua_rawgeti(state, table, i + 1);
+            indices[dimension] = i;
+            if (dimension == lengths.Length - 1)
+            {
+                var value = LuaApi.lua_type(state, -1) == LuaApi.LuaTNil
+                    ? null
+                    : Marshal.ReadObject(-1);
+                array.SetValue(ConvertMember(value, array.GetType().GetElementType()!), indices);
+            }
+            else
+            {
+                if (LuaApi.lua_type(state, -1) != LuaApi.LuaTTable)
+                {
+                    throw new LuaConversionException("array", "non-table", -1);
+                }
+
+                FillMultiArray(array, indices, dimension + 1, LuaApi.lua_gettop(state), lengths);
+            }
+
+            LuaApi.lua_settop(state, table);
+        }
     }
 
     private T[] ReadArray<T>(IntPtr state, int table, int length, ArrayReader<T> read)

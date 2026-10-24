@@ -303,6 +303,32 @@ public static class ArrayMethods
 
         return result;
     }
+
+    public static int SumPlayers(Player[] values)
+    {
+        var total = 0;
+        foreach (var value in values)
+        {
+            total += value.Hp;
+        }
+
+        return total;
+    }
+
+    public static Player[] MakePlayers(int hp) => [new Player(hp), new Player(hp + 1)];
+
+    public static int SumMatrix(int[,] values)
+    {
+        var total = 0;
+        foreach (var value in values)
+        {
+            total += value;
+        }
+
+        return total;
+    }
+
+    public static int[,] MakeMatrix(int size) => new int[,] { { size, size + 1 }, { size + 2, size + 3 } };
 }
 
 public sealed class NumberList

@@ -51,6 +51,7 @@
   "namespace": "LuaLoom.Sample.Generated",
   "luaCallCSharp": ["LuaLoom.Sample.Player", "LuaLoom.Sample.Config", "LuaLoom.Sample.PlayerExtensions"],
   "csharpCallLua": ["LuaLoom.Sample.ILuaUpdate", "System.Action<int>", "System.Func<int, string>"],
+  "genericMethods": ["LuaLoom.Sample.Utils.Describe<int>"],
   "blackList": ["LuaLoom.Sample.Player.Secret"],
   "doNotGen": ["LuaLoom.Sample.Legacy"]
 }
@@ -96,6 +97,7 @@ lua-loom-gen generate --config lua-loom.json --coverage
 | `Namespace` | `string` | 生成代码命名空间，默认 `LuaLoom.Generated` |
 | `LuaCallCSharp` | `string[]` | 需要生成包装的类型全名 |
 | `CSharpCallLua` | `string[]` | 需要生成调用器的 delegate 与 interface |
+| `GenericMethods` | `string[]` | 需要生成闭合实例的泛型方法，格式 `Type.Method<T1,T2>` |
 | `BlackList` | `string[]` | 不生成、留给反射的 `Type` 或 `Type.Member` |
 | `DoNotGen` | `string[]` | 显式声明不生成的 `Type` 或 `Type.Member` |
 
@@ -115,13 +117,14 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 
 1. 读取配置，校验字段完整性；相对路径以配置文件所在目录为基准解析。
 2. `MetadataLoadContext` 加载目标程序集及其依赖，解析每个类型全名；缺失则记 `LL0001`。`csharpCallLua` 支持 `Name<Arg1, Arg2>`：先查目标程序集、核心程序集与已加载程序集，再递归解析泛型参数并 `MakeGenericType`；基本类型别名映射到 CLR 类型。
-3. 遍历类型成员：跳过非公共成员、`obsolete` 成员，以及生成器不支持的类型（多维数组、开放泛型等）；被跳过的成员由 M004 的反射回落接管，不记错误。基类成员只有在直接基类也列入 `luaCallCSharp` 时才纳入。
-4. 对 delegate/interface 生成 invoker 或实现类；配置中的静态扩展类额外生成 `RegisterExtensionType` 与 `RegisterExtensions` 分派表；类型绑定包含非字符串键索引器、操作符与事件订阅 thunk。方法组按实参个数与 Lua 类型条件分派（字符串、布尔、整数、数值、userdata 等）；复杂重载组（`ref`/`out`/`params`/默认值混合）也用统一的动态 arity 分派，`out` 不消耗实参，`params` 吞掉剩余实参，缺省值按实参个数补齐；一维数组通过 `LuaBinding.ReadArray<T>` / `PushArray<T>` 编解码。接口实现支持事件（转发 `add_<Event>`/`remove_<Event>`）和无约束泛型方法（方法名查表、`T` 走 `ConvertObject<T>`）；带约束的泛型接口方法与默认接口实现仍不生成。闭合泛型 delegate 的 `TypeRef` 递归输出 `global::Namespace.Type<...>`，文件名用 `TypeRef` 做字符白名单替换，避免写入尖括号、逗号与程序集限定名。
+3. 遍历类型成员：跳过非公共成员、`obsolete` 成员，以及生成器不支持的类型（开放泛型、指针等）；被跳过的成员由 M004 的反射回落接管，不记错误。基类成员只有在直接基类也列入 `luaCallCSharp` 时才纳入。
+4. 对 delegate/interface 生成 invoker 或实现类；配置中的静态扩展类额外生成 `RegisterExtensionType` 与 `RegisterExtensions` 分派表；类型绑定包含非字符串键索引器、操作符与事件订阅 thunk。方法组按实参个数与 Lua 类型条件分派（字符串、布尔、整数、数值、userdata 等）；复杂重载组（`ref`/`out`/`params`/默认值混合）也用统一的动态 arity 分派，`out` 不消耗实参，`params` 吞掉剩余实参，缺省值按实参个数补齐；一维数组通过 `LuaBinding.ReadArray<T>` / `PushArray<T>` 编解码，矩形数组通过 `ReadObjectAs<T[,]>` / `PushArray(Array)` 递归成嵌套表。接口实现支持事件（转发 `add_<Event>`/`remove_<Event>`）和无约束泛型方法（方法名查表、`T` 走 `ConvertObject<T>`）；带约束的泛型接口方法与默认接口实现仍不生成。闭合泛型 delegate 的 `TypeRef` 递归输出 `global::Namespace.Type<...>`，文件名用 `TypeRef` 做字符白名单替换，避免写入尖括号、逗号与程序集限定名。
 5. 用 `CSharpSyntaxTree.ParseText` 做语法校验；真正的编译校验放在测试里，用 `CSharpCompilation` 对产物做一次 Emit。
 6. 通过后按文件名 `Ordinal` 排序写文件，UTF-8 无 BOM，换行 `\n`。
 7. 按配置类型生成 `link.xml`，避免 Unity IL2CPP 裁剪反射/生成所需元数据；XML 文件跳过 C# 语法校验。
 8. `check` 模式重新生成到内存，与磁盘文件逐字节比较，差异输出文件清单。
 9. 同时产出 `Coverage` 列表：每个配置成员标记 `generated` / `reflection` / `skipped`；`BlackList`/`DoNotGen` 命中的类型或成员记为 `skipped`，未生成原因随记录返回。命中接口任一成员时跳过整个接口实现，避免产出缺成员的实现类；命中 delegate 类型时跳过 invoker。
+10. `genericMethods` 按 `Type.Method<T1,T2>` 解析闭合实例，生成独立 binder，并在 `LuaBindings.Register` 中调用 `RegisterGenericMethod`。运行期 `lua_loom_generic` 先查这张表，命中后直接调用生成 handler；未配置的闭合实例仍走 `MakeGenericMethod` 反射，严格模式下会被拒绝。
 
 **复杂度**：O(类型数 × 成员数)；生成 100 个类型的耗时上限在模块验收中定为 5 秒以内（本机）。
 
@@ -131,7 +134,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 - 注册是显式的：消费方创建 `LuaEnv` 后调用 `LuaBindings.Register(env)`，把类型、delegate、interface 三类绑定注册进环境，不使用 `ModuleInitializer`，避免全局静态注册表。
 - 产物是普通 `.cs` 文件，放回项目目录即被 SDK 默认通配包含，不需要手写 `<Compile Include>`。
 - 生成器依赖 `Microsoft.CodeAnalysis.CSharp`，只作为 CLI 的构建期依赖，不随运行时库发布。
-- 诊断码固定：`LL0001` 类型不存在、`LL0002` 成员类型不支持、`LL0003` 开放或不受支持的泛型、`LL0004` 配置重复、`LL0006` 产物语法错误。
+- 诊断码固定：`LL0001` 类型不存在、`LL0002` 成员类型不支持、`LL0003` 开放或不受支持的泛型、`LL0004` 配置重复、`LL0005` 泛型方法配置无法解析、`LL0006` 产物语法错误。
 - 生成失败时不写任何文件，避免留下半成品。
 
 **当前支持范围**
@@ -144,13 +147,15 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 操作符生成（`+ - * / %`、一元 `-`、`==`、`<`、`<=`） | 其它操作符 |
 | 实例索引器（非字符串键） | 字符串键索引器、静态索引器 |
 | 已配置基类的继承成员 | 未配置基类的成员 |
-| 实例/静态方法（含同参数个数重载，按 Lua 类型分派） | 泛型方法生成（运行期 `lua_loom_generic`） |
+| 实例/静态方法（含同参数个数重载，按 Lua 类型分派） | 未在 `genericMethods` 中列出的泛型方法（运行期 `lua_loom_generic`） |
+| `genericMethods` 指定的闭合泛型方法 | 泛型方法的全组合生成 |
 | `ref`/`out`/`params`、默认值及其与重载混合的组 | 带约束的泛型参数 |
 | 非泛型与闭合泛型 delegate（含 `params`/`ref`/`out`/数组） | 开放泛型 delegate |
 | interface 的方法、属性、事件与无约束泛型方法（含 `params`/`ref`/`out`/数组与闭合泛型接口） | 默认接口实现、显式接口实现、带约束的泛型方法 |
 | 扩展方法类（列入 `luaCallCSharp`，生成注册与分派表） | 未配置的扩展方法不扫描、不可见 |
-| 一维数组参数/返回值（基本类型、字符串、枚举、`object`） | 多维数组、类元素数组 |
+| 一维/矩形数组参数/返回值（含类元素、字符串、枚举、`object`） | 交错数组的运行时特殊形状、非零下界数组 |
 | `decimal` 参数/返回值（struct userdata） | 反射路径的 decimal 自动识别 |
+| 配置类型的 `Cast<T>`（`RegisterCast`） | 无无参构造的类、接口、集合/字典的生成式转换 |
 | `BlackList`/`DoNotGen` 类型或成员、`--coverage` 报告 | 按签名精确排除重载（当前按成员名排除整组） |
 
 同一参数个数的多个重载取声明顺序第一个；多类型重载的精确解析留给运行时反射路径。生成器跳过的成员不会丢失，由 [M004](M004-interop-bridge.md) 的回落路径接管。
@@ -188,6 +193,10 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | `blackList` 含 `Player.Add` | `generate` | `Add` 不在产物中，覆盖记录为 `blacklisted member` |
 | `doNotGen` 含整个类型 | `generate` | 不产出该类型 binder，覆盖记录为 `do-not-gen type` |
 | `generate --coverage` | CLI | 输出 generated/reflection/skipped 统计与未生成原因 |
+| `genericMethods` 指定 `Generics.Describe<int>` | `generate` + 编译 + 运行 | 产物含 GenericBinder，`lua_loom_generic` 直接命中 |
+| 配置类型 + `table.Cast<T>()` | 运行 | 走 `RegisterCast` 生成的强类型转换 |
+| 方法参数/返回值为 `Player[]` | `generate` + 运行 | 类元素数组经 userdata 表往返，元素可访问 |
+| 方法参数/返回值为 `int[,]` | `generate` + 运行 | 嵌套 Lua 表与矩形数组互转 |
 | 派生类 + 已配置基类 | `generate` | 派生类绑定包含基类字段/属性/方法 |
 | 派生类单独配置 | `generate` | 不生成未配置基类成员 |
 | 类型含 `this[int]` | `generate` | 绑定含 `InstanceIndexer`/`InstanceIndexerSet` |

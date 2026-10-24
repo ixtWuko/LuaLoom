@@ -186,6 +186,38 @@ internal sealed class LuaMarshal : IDisposable
         }
     }
 
+    public void PushArray(Array? values)
+    {
+        if (values is null)
+        {
+            LuaApi.lua_pushnil(_state);
+            return;
+        }
+
+        PushArrayDimension(values, new int[values.Rank], 0);
+    }
+
+    private void PushArrayDimension(Array values, int[] indices, int dimension)
+    {
+        var length = values.GetLength(dimension);
+        LuaApi.lua_createtable(_state, length, 0);
+        var tableIndex = LuaApi.lua_gettop(_state);
+        for (var i = 0; i < length; i++)
+        {
+            indices[dimension] = i;
+            if (dimension == values.Rank - 1)
+            {
+                PushObject(values.GetValue(indices));
+            }
+            else
+            {
+                PushArrayDimension(values, indices, dimension + 1);
+            }
+
+            LuaApi.lua_rawseti(_state, tableIndex, i + 1);
+        }
+    }
+
     public void RegisterMarshaler(ITypeMarshaler marshaler) => _customMarshalers.Add(marshaler);
 
     public void Push<T>(T value)
@@ -554,6 +586,9 @@ internal sealed class LuaMarshal : IDisposable
                     LuaApi.lua_rawseti(_state, arrayTable, i + 1);
                 }
 
+                return;
+            case Array array:
+                PushArray(array);
                 return;
         }
 

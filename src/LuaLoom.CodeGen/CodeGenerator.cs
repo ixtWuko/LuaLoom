@@ -18,6 +18,9 @@ public sealed class GeneratorConfig
 
     public string[] CSharpCallLua { get; set; } = [];
 
+    /// <summary>需要生成闭合实例的泛型方法，格式为 `Type.Method&lt;T1,T2&gt;`。</summary>
+    public string[] GenericMethods { get; set; } = [];
+
     /// <summary>不生成绑定、改走反射的成员或类型（`Type` 或 `Type.Member`）。</summary>
     public string[] BlackList { get; set; } = [];
 
@@ -154,6 +157,11 @@ public static class CodeGenerator
             var binder = Sanitize(type.FullName!) + "Binder";
             files.Add(new GeneratedFile(binder + ".g.cs", EmitTypeBinder(type, binder, config)));
             registrations.Add($"        env.RegisterType(global::{config.Namespace}.{binder}.Create());");
+            if (CanGenerateCast(type))
+            {
+                registrations.Add(
+                    $"        env.RegisterCast(typeof({TypeRef(type)}), global::{config.Namespace}.{binder}.Cast);");
+            }
 
             if (IsExtensionClass(type))
             {
@@ -222,6 +230,33 @@ public static class CodeGenerator
             }
         }
 
+        foreach (var specification in config.GenericMethods.Distinct(StringComparer.Ordinal)
+            .OrderBy(static s => s, StringComparer.Ordinal))
+        {
+            if (!TryResolveGenericMethod(context, assembly, specification, out var type, out var method, out var reason))
+            {
+                diagnostics.Add(new Diagnostic("LL0005", $"Generic method '{specification}': {reason}."));
+                continue;
+            }
+
+            var closed = method.MakeGenericMethod(type.Arguments);
+            if (!IsSupportedMethod(closed))
+            {
+                diagnostics.Add(new Diagnostic(
+                    "LL0002",
+                    $"Generic method '{specification}' has parameters or a return type that are not generated."));
+                continue;
+            }
+
+            var className = FileStem(type.Type!) + "_" + method.Name + "_"
+                + string.Join("_", type.Arguments.Select(FileStem)) + "GenericBinder";
+            files.Add(new GeneratedFile(
+                className + ".g.cs",
+                EmitGenericMethodBinder(type.Type!, closed, className, config)));
+            registrations.Add(
+                $"        env.RegisterGenericMethod(typeof({TypeRef(type.Type!)}), \"{method.Name}\", new[] {{ {string.Join(", ", type.Arguments.Select(static a => $"typeof({TypeRef(a)})"))} }}, global::{config.Namespace}.{className}.Handler);");
+        }
+
         files.Add(new GeneratedFile("LuaBindings.g.cs", EmitRegistration(config, registrations)));
         files.Add(new GeneratedFile("link.xml", EmitLinkXml(referencedTypes), IsCode: false));
 
@@ -242,6 +277,106 @@ public static class CodeGenerator
             .ToList();
         files.Sort(static (a, b) => string.CompareOrdinal(a.FileName, b.FileName));
         return new GenerationResult(files, diagnostics, BuildCoverage(assembly, context, config));
+    }
+
+    private static bool TryResolveGenericMethod(
+        MetadataLoadContext context,
+        Assembly assembly,
+        string specification,
+        out (Type? Type, Type[] Arguments) resolved,
+        out MethodInfo method,
+        out string reason)
+    {
+        resolved = (null, []);
+        method = null!;
+
+        var dot = specification.LastIndexOf('.');
+        if (dot <= 0 || dot == specification.Length - 1)
+        {
+            reason = "expected format 'Namespace.Type.Method<T1,T2>'";
+            return false;
+        }
+
+        var typeName = specification[..dot].Trim();
+        var methodSpec = specification[(dot + 1)..].Trim();
+        var open = methodSpec.IndexOf('<');
+        if (open <= 0 || !methodSpec.EndsWith('>'))
+        {
+            reason = "expected a closed generic method such as 'Method<int>'";
+            return false;
+        }
+
+        var methodName = methodSpec[..open].Trim();
+        var argumentNames = SplitGenericArguments(methodSpec[(open + 1)..^1]);
+        if (argumentNames.Count == 0)
+        {
+            reason = "no type arguments supplied";
+            return false;
+        }
+
+        var type = ResolveConfiguredType(context, assembly, typeName);
+        if (type is null)
+        {
+            reason = $"type '{typeName}' not found";
+            return false;
+        }
+
+        var arguments = new Type[argumentNames.Count];
+        for (var i = 0; i < argumentNames.Count; i++)
+        {
+            var argument = ResolveConfiguredType(context, assembly, argumentNames[i]);
+            if (argument is null)
+            {
+                reason = $"type argument '{argumentNames[i]}' not found";
+                return false;
+            }
+
+            arguments[i] = argument;
+        }
+
+        var candidates = type
+            .GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance)
+            .Where(m => m.Name == methodName
+                && m.IsGenericMethodDefinition
+                && m.GetGenericArguments().Length == arguments.Length)
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            reason = $"generic method '{methodName}' with {arguments.Length} type argument(s) not found";
+            return false;
+        }
+
+        method = candidates[0];
+        try
+        {
+            method.MakeGenericMethod(arguments);
+        }
+        catch (ArgumentException exception)
+        {
+            reason = exception.Message;
+            return false;
+        }
+
+        resolved = (type, arguments);
+        reason = string.Empty;
+        return true;
+    }
+
+    private static string EmitGenericMethodBinder(
+        Type type,
+        MethodInfo method,
+        string className,
+        GeneratorConfig config)
+    {
+        var builder = new StringBuilder();
+        WriteHeader(builder, config.Namespace);
+        builder.AppendLine($"internal static class {className}");
+        builder.AppendLine("{");
+        EmitMethodImplementation(builder, type, method, method.IsStatic, "Invoke");
+        builder.AppendLine();
+        builder.AppendLine("    public static global::LuaLoom.Native.LuaCSFunction Handler => Invoke;");
+        builder.AppendLine("}");
+        return builder.ToString();
     }
 
     private static Type? ResolveConfiguredType(
@@ -499,6 +634,26 @@ public static class CodeGenerator
             }
 
             AddTypeCoverage(type, config, entries, seen);
+        }
+
+        foreach (var specification in config.GenericMethods)
+        {
+            if (TryResolveGenericMethod(
+                context,
+                assembly,
+                specification,
+                out var resolved,
+                out var method,
+                out _))
+            {
+                AddCoverage(
+                    entries,
+                    seen,
+                    resolved.Type!,
+                    method.Name + "<" + string.Join(", ", resolved.Arguments.Select(static a => a.Name)) + ">",
+                    "generated",
+                    string.Empty);
+            }
         }
 
         foreach (var name in config.CSharpCallLua)
@@ -946,8 +1101,63 @@ public static class CodeGenerator
             EmitOperatorHandlers(builder, type, operators);
         }
 
+        if (CanGenerateCast(type))
+        {
+            EmitCastMethod(builder, type, config, includeBase);
+        }
+
         builder.AppendLine("}");
         return builder.ToString();
+    }
+
+    private static bool CanGenerateCast(Type type)
+    {
+        if (type.IsAbstract || type.IsInterface || type.IsEnum || type.IsPrimitive)
+        {
+            return false;
+        }
+
+        if (type.IsClass && type.GetConstructor(Type.EmptyTypes) is null)
+        {
+            return false;
+        }
+
+        return type.IsClass || type.IsValueType;
+    }
+
+    private static void EmitCastMethod(
+        StringBuilder builder,
+        Type type,
+        GeneratorConfig config,
+        bool includeBase)
+    {
+        var properties = SupportedProperties(type, BindingFlags.Instance, includeBase: includeBase)
+            .Where(static p => p.SetMethod is { IsPublic: true })
+            .Where(p => !IsMemberDenied(config, type, p.Name))
+            .ToList();
+        var fields = SupportedFields(type, BindingFlags.Instance, includeBase: includeBase)
+            .Where(static f => !f.IsInitOnly)
+            .Where(f => !IsMemberDenied(config, type, f.Name))
+            .ToList();
+
+        builder.AppendLine();
+        builder.AppendLine($"    public static {TypeRef(type)} Cast(global::LuaLoom.LuaTable table)");
+        builder.AppendLine("    {");
+        builder.AppendLine($"        var value = new {TypeRef(type)}();");
+        foreach (var property in properties)
+        {
+            builder.AppendLine(
+                $"        value.{property.Name} = global::LuaLoom.LuaBinding.ConvertObject<{TypeRef(property.PropertyType)}>(table.Get<object>(\"{property.Name}\"));");
+        }
+
+        foreach (var field in fields)
+        {
+            builder.AppendLine(
+                $"        value.{field.Name} = global::LuaLoom.LuaBinding.ConvertObject<{TypeRef(field.FieldType)}>(table.Get<object>(\"{field.Name}\"));");
+        }
+
+        builder.AppendLine("        return value;");
+        builder.AppendLine("    }");
     }
 
     private static void EmitConstructor(StringBuilder builder, Type type, List<ConstructorInfo> constructors)
@@ -1851,7 +2061,9 @@ public static class CodeGenerator
                 }
 
                 var read = parameter.ParameterType.IsArray
-                    ? $"global::LuaLoom.LuaBinding.ReadArray<{TypeRef(parameter.ParameterType.GetElementType()!)}>(L, {argumentOffset + cursor})"
+                    ? parameter.ParameterType.GetArrayRank() == 1
+                        ? $"global::LuaLoom.LuaBinding.ReadArray<{TypeRef(parameter.ParameterType.GetElementType()!)}>(L, {argumentOffset + cursor})"
+                        : ReadExpression(parameter.ParameterType, argumentOffset + cursor)
                     : ReadExpression(parameter.ParameterType, argumentOffset + cursor);
                 if (parameter.HasDefaultValue)
                 {
@@ -1914,9 +2126,12 @@ public static class CodeGenerator
             arguments.AddRange(Enumerable.Range(0, parameters.Length).Select(static i => "a" + i));
         }
 
+        var methodName = method.IsGenericMethod
+            ? method.Name + "<" + string.Join(", ", method.GetGenericArguments().Select(TypeRef)) + ">"
+            : method.Name;
         var invocation = isStatic
-            ? $"{TypeRef(type)}.{method.Name}({string.Join(", ", arguments)})"
-            : $"self.{method.Name}({string.Join(", ", arguments)})";
+            ? $"{TypeRef(type)}.{methodName}({string.Join(", ", arguments)})"
+            : $"self.{methodName}({string.Join(", ", arguments)})";
 
         var resultCount = 0;
         if (Is(method.ReturnType, typeof(void)))
@@ -2593,8 +2808,7 @@ public static class CodeGenerator
 
         if (type.IsArray)
         {
-            return type.GetArrayRank() == 1
-                && IsSupportedArrayElement(type.GetElementType()!);
+            return IsSupportedArrayElement(type.GetElementType()!);
         }
 
         return type.IsPrimitive
@@ -2606,22 +2820,7 @@ public static class CodeGenerator
     }
 
     private static bool IsSupportedArrayElement(Type type) =>
-        type.IsEnum
-        || Is(type, typeof(bool))
-        || Is(type, typeof(byte))
-        || Is(type, typeof(sbyte))
-        || Is(type, typeof(short))
-        || Is(type, typeof(ushort))
-        || Is(type, typeof(int))
-        || Is(type, typeof(uint))
-        || Is(type, typeof(long))
-        || Is(type, typeof(ulong))
-        || Is(type, typeof(float))
-        || Is(type, typeof(double))
-        || Is(type, typeof(string))
-        || Is(type, typeof(object))
-        || Is(type, typeof(LuaTable))
-        || Is(type, typeof(LuaFunction));
+        type.IsGenericParameter || IsSupportedParameter(type);
 
     private static string HandlerBase(string name, bool isStatic) =>
         $"{(isStatic ? "Static" : "Instance")}_{name}";
@@ -2787,9 +2986,11 @@ public static class CodeGenerator
             return $"global::LuaLoom.LuaBinding.PushString(L, {expression});";
         }
 
-        if (type.IsArray && type.GetArrayRank() == 1)
+        if (type.IsArray)
         {
-            return $"global::LuaLoom.LuaBinding.PushArray<{TypeRef(type.GetElementType()!)}>(L, {expression});";
+            return type.GetArrayRank() == 1
+                ? $"global::LuaLoom.LuaBinding.PushArray<{TypeRef(type.GetElementType()!)}>(L, {expression});"
+                : $"global::LuaLoom.LuaBinding.PushArray(L, {expression});";
         }
 
         if (Is(type, typeof(decimal)))

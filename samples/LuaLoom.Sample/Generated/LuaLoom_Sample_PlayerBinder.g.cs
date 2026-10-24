@@ -165,4 +165,12 @@ internal static class LuaLoom_Sample_PlayerBinder
                 return 1;
         }
     }
+
+    public static global::LuaLoom.Sample.Player Cast(global::LuaLoom.LuaTable table)
+    {
+        var value = new global::LuaLoom.Sample.Player();
+        value.Name = global::LuaLoom.LuaBinding.ConvertObject<string>(table.Get<object>("Name"));
+        value.Hp = global::LuaLoom.LuaBinding.ConvertObject<int>(table.Get<object>("Hp"));
+        return value;
+    }
 }
