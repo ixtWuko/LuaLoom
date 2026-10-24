@@ -136,6 +136,7 @@ public static class CodeGenerator
             if (IsExtensionClass(type))
             {
                 registrations.Add($"        env.RegisterExtensionType(typeof({TypeRef(type)}));");
+                registrations.Add($"        global::{config.Namespace}.{binder}.RegisterExtensions(env);");
             }
         }
 
@@ -407,6 +408,7 @@ public static class CodeGenerator
         var instanceFields = SupportedFields(type, BindingFlags.Instance, includeBase: includeBase);
         var staticFields = SupportedFields(type, BindingFlags.Static, includeBase: includeBase);
         var events = SupportedEvents(type, includeBase);
+        var extensionMethods = staticMethods.Where(IsExtensionMethod).ToList();
         var indexer = FindIndexer(type);
         var operators = FindOperators(type);
 
@@ -469,6 +471,11 @@ public static class CodeGenerator
         }
 
         builder.AppendLine("    };");
+
+        if (extensionMethods.Count > 0)
+        {
+            EmitExtensionRegistration(builder, extensionMethods);
+        }
 
         if (constructors.Count > 0)
         {
@@ -2043,6 +2050,37 @@ public static class CodeGenerator
         }
 
         return false;
+    }
+
+    private static bool IsExtensionMethod(MethodInfo method)
+    {
+        if (!method.IsStatic || method.GetParameters().Length == 0)
+        {
+            return false;
+        }
+
+        return method.GetCustomAttributesData()
+            .Any(static attribute => attribute.AttributeType.FullName
+                == typeof(System.Runtime.CompilerServices.ExtensionAttribute).FullName);
+    }
+
+    private static void EmitExtensionRegistration(
+        StringBuilder builder,
+        IReadOnlyList<MethodInfo> methods)
+    {
+        builder.AppendLine();
+        builder.AppendLine("    public static void RegisterExtensions(global::LuaLoom.LuaEnv env)");
+        builder.AppendLine("    {");
+
+        foreach (var group in methods.GroupBy(static m => m.Name, StringComparer.Ordinal))
+        {
+            var method = group.First();
+            var target = method.GetParameters()[0].ParameterType;
+            builder.AppendLine(
+                $"        env.RegisterExtensionMethod(typeof({TypeRef(target)}), \"{method.Name}\", {HandlerBase(method.Name, isStatic: true)});");
+        }
+
+        builder.AppendLine("    }");
     }
 
     private static bool IsExtensionClass(Type type)

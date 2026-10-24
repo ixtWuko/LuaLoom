@@ -547,6 +547,15 @@ internal static class Interop
             return 1;
         }
 
+        if (environment.TryGetExtensionMethod(type, name, out var generatedExtension))
+        {
+            LuaApi.lua_pushcclosure(
+                s,
+                NativeMarshal.GetFunctionPointerForDelegate(generatedExtension),
+                0);
+            return 1;
+        }
+
         var extension = environment.FindExtensionMethod(type, name);
         if (extension is not null)
         {

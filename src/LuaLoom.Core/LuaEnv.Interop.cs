@@ -1,4 +1,5 @@
 using System.Reflection;
+using LuaLoom.Native;
 
 namespace LuaLoom;
 
@@ -10,6 +11,7 @@ public sealed partial class LuaEnv
     private readonly Dictionary<Type, Func<LuaTable, object>> _interfaceBindings = new();
     private readonly List<Type> _extensionTypes = new();
     private readonly Dictionary<(Type Type, string Name), (bool Found, MethodInfo? Method)> _extensionCache = new();
+    private readonly List<(Type Target, string Name, LuaCSFunction Handler)> _extensionMethods = new();
     private readonly HashSet<Type> _privateAccessible = new();
 
     public void RegisterType(LuaTypeBinding binding)
@@ -64,6 +66,31 @@ public sealed partial class LuaEnv
     }
 
     internal bool IsPrivateAccessible(Type type) => _privateAccessible.Contains(type);
+
+    /// <summary>注册生成器产出的扩展方法分派入口。</summary>
+    public void RegisterExtensionMethod(Type targetType, string name, LuaCSFunction handler)
+    {
+        ArgumentNullException.ThrowIfNull(targetType);
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentNullException.ThrowIfNull(handler);
+        EnsureReady();
+        _extensionMethods.Add((targetType, name, handler));
+    }
+
+    internal bool TryGetExtensionMethod(Type type, string name, out LuaCSFunction handler)
+    {
+        foreach (var entry in _extensionMethods)
+        {
+            if (entry.Name == name && entry.Target.IsAssignableFrom(type))
+            {
+                handler = entry.Handler;
+                return true;
+            }
+        }
+
+        handler = null!;
+        return false;
+    }
 
     internal MethodInfo? FindExtensionMethod(Type type, string name)
     {

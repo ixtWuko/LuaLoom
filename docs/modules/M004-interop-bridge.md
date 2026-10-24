@@ -179,7 +179,7 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 11. 索引器：键不是字符串时先查绑定的 `InstanceIndexer`/`InstanceIndexerSet`，未处理再走 `this[...]` 反射；字符串键仍按成员名解析。
 12. 事件：配置类型优先返回生成的订阅 thunk，未生成时回退 `EventInfo` 反射。`('+', fn)` 用生成的委托 lambda 或 `LuaEventDelegateFactory` 包装 Lua 函数，`('-', fn)` 按 `lua_topointer` 找到同一函数对应的委托并移除，随后释放函数句柄。订阅关系存放在 `ConditionalWeakTable`，对象被回收时随之释放。
 13. 泛型方法：`lua_loom_generic(type, methodName, T1, ...)` 解析泛型定义，按类型参数个数匹配，`MakeGenericMethod` 闭合后返回调用器；静态方法参数从索引 1 开始，实例方法索引 1 是对象、参数从 2 开始。
-14. 扩展方法：实例成员未命中时，只在 `RegisterExtensionType` 注册过的 public static 类中查找 `ExtensionAttribute` 方法，要求首参类型可由实例类型赋值；结果按 `(Type, Name)` 缓存，命中后复用静态方法调用闭包。未注册的扩展类不会被扫描或访问。
+14. 扩展方法：实例成员未命中时，先查生成器注册的 `RegisterExtensionMethod` 分派表；未命中再在 `RegisterExtensionType` 注册过的 public static 类中查找 `ExtensionAttribute` 方法。要求首参类型可由实例类型赋值；反射扫描结果按 `(Type, Name)` 缓存。未注册的扩展类不会被扫描或访问。
 15. xLua 兼容 API：`typeof` 返回 `Type` 对象；`cast` 校验对象可赋值后返回同一对象视图；`uint64.*` 用无符号位模式实现解析、比较、除法与取模；`xlua.get_generic_method` 是 `lua_loom_generic` 的 `xlua` 命名空间别名；`xlua.private_accessible` 把类型加入非公共成员可见集合；`xlua.structclone` 复制原始 struct userdata 字节。
 
 **复杂度**：`Cast` O(成员数)（缓存后不再反射查找）；delegate 调用 O(1)；反射兜底按成员名查找，未做跨调用缓存。
@@ -217,7 +217,7 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 | 重载 `Pick(string)` 与 `Pick(object)` | Lua 传 `'x'` | 选中 `Pick(string)` |
 | 重载 `Pick(int)` 与 `Pick(long)` | Lua 传 `1` | 选中 `Pick(long)` |
 | 单参数带默认值 | `Optional()` | 返回默认值 `7` |
-| 扩展方法 `Triple(this Player, int)` | `p:Triple(2)` | 返回 `p.Hp * 2` |
+| 扩展方法 `Triple(this Player, int)` | `p:Triple(2)` | 返回 `p.Hp * 2`；生成注册优先 |
 | 绑定的非字符串索引器 | `bag[1] = 5; return bag[1]` | 走 `InstanceIndexer`/`InstanceIndexerSet` |
 | `int[]` 参数与返回值 | `Sum({1,2,3})` 与 `Double({1,2})` | 生成绑定与反射结果一致 |
 | 配置类型的 `__add` | `Money(1) + Money(2)` | 走生成的 `Operators` |

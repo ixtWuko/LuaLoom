@@ -75,6 +75,10 @@ public sealed class CodeGenTests
             "RegisterExtensionType(typeof(global::LuaLoom.UnitTests.Sample.PlayerExtensions))",
             bindings.Content,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "PlayerExtensionsBinder.RegisterExtensions(env)",
+            bindings.Content,
+            StringComparison.Ordinal);
 
         var bag = result.Files.Single(static f => f.FileName == "LuaLoom_UnitTests_Sample_BagBinder.g.cs");
         Assert.Contains("InstanceIndexer = IndexerGet", bag.Content, StringComparison.Ordinal);

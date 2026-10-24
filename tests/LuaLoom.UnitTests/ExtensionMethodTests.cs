@@ -43,7 +43,30 @@ public sealed class ExtensionMethodTests
         Assert.Equal(12L, results[0]);
     }
 
+    [Fact]
+    public void GeneratedExtensionRegistration_TakesPrecedence()
+    {
+        using var env = new LuaEnv();
+        env.RegisterExtensionMethod(typeof(Player), "Triple", TripleHandler);
+
+        var results = env.DoString($"""
+            local p = {PlayerType}(3)
+            return p:Triple(2)
+            """);
+
+        Assert.Equal(6L, results[0]);
+    }
+
     private static readonly LuaCSFunction EmptyIndexHandler = EmptyIndex;
+    private static readonly LuaCSFunction TripleHandler = Triple;
 
     private static int EmptyIndex(IntPtr state) => 0;
+
+    private static int Triple(IntPtr state)
+    {
+        var player = (Player)LuaBinding.ReadObject(state, 1)!;
+        var value = LuaBinding.ReadInt(state, 2);
+        LuaBinding.PushInt(state, player.Hp * value);
+        return 1;
+    }
 }

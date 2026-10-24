@@ -107,7 +107,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 1. 读取配置，校验字段完整性；相对路径以配置文件所在目录为基准解析。
 2. `MetadataLoadContext` 加载目标程序集及其依赖，解析每个类型全名；缺失则记 `LL0001`。`csharpCallLua` 支持 `Name<Arg1, Arg2>`：先查目标程序集、核心程序集与已加载程序集，再递归解析泛型参数并 `MakeGenericType`；基本类型别名映射到 CLR 类型。
 3. 遍历类型成员：跳过非公共成员、`obsolete` 成员，以及生成器不支持的类型（普通数组、泛型类型等）；被跳过的成员由 M004 的反射回落接管，不记错误。基类成员只有在直接基类也列入 `luaCallCSharp` 时才纳入。
-4. 对 delegate/interface 生成 invoker 或实现类；配置中的静态扩展类额外生成 `RegisterExtensionType` 注册；类型绑定包含非字符串键索引器、操作符与事件订阅 thunk。同参数个数的方法重载按 Lua 类型条件分派（字符串、布尔、整数、数值、userdata 等），无法覆盖的组合仍回退反射；单方法默认值参数按实参个数生成多个分支并补齐缺省值；单方法 `ref`/`out`/`params` 生成参数装配与多返回值；一维数组通过 `LuaBinding.ReadArray<T>` / `PushArray<T>` 编解码。闭合泛型 delegate 的 `TypeRef` 递归输出 `global::Namespace.Type<...>`，文件名用 `TypeRef` 做字符白名单替换，避免写入尖括号、逗号与程序集限定名。
+4. 对 delegate/interface 生成 invoker 或实现类；配置中的静态扩展类额外生成 `RegisterExtensionType` 与 `RegisterExtensions` 分派表；类型绑定包含非字符串键索引器、操作符与事件订阅 thunk。同参数个数的方法重载按 Lua 类型条件分派（字符串、布尔、整数、数值、userdata 等），无法覆盖的组合仍回退反射；单方法默认值参数按实参个数生成多个分支并补齐缺省值；单方法 `ref`/`out`/`params` 生成参数装配与多返回值；一维数组通过 `LuaBinding.ReadArray<T>` / `PushArray<T>` 编解码。闭合泛型 delegate 的 `TypeRef` 递归输出 `global::Namespace.Type<...>`，文件名用 `TypeRef` 做字符白名单替换，避免写入尖括号、逗号与程序集限定名。
 5. 用 `CSharpSyntaxTree.ParseText` 做语法校验；真正的编译校验放在测试里，用 `CSharpCompilation` 对产物做一次 Emit。
 6. 通过后按文件名 `Ordinal` 排序写文件，UTF-8 无 BOM，换行 `\n`。
 7. `check` 模式重新生成到内存，与磁盘文件逐字节比较，差异输出文件清单。
@@ -138,7 +138,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 单方法默认值参数（按缺省值补齐） | 默认值与同参数个数重载混合的组 |
 | 非泛型 delegate 与闭合泛型 delegate（如 `Action<int>`） | 开放泛型 delegate |
 | interface 的方法与属性（含闭合泛型接口） | 接口默认实现、显式接口实现 |
-| 扩展方法类（列入 `luaCallCSharp`，生成注册） | 未配置的扩展方法不扫描、不可见 |
+| 扩展方法类（列入 `luaCallCSharp`，生成注册与分派表） | 未配置的扩展方法不扫描、不可见 |
 | 一维数组参数/返回值（基本类型、字符串、枚举、`object`） | 多维数组、类元素数组 |
 
 同一参数个数的多个重载取声明顺序第一个；多类型重载的精确解析留给运行时反射路径。生成器跳过的成员不会丢失，由 [M004](M004-interop-bridge.md) 的回落路径接管。
@@ -167,6 +167,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 方法参数/返回值为 `int[]` | `generate` | 产物使用 `ReadArray<int>` / `PushArray<int>`，编译通过 |
 | 类型定义 `+`/`==` 等操作符 | `generate` | 产物包含 `Operators` 字典，编译通过 |
 | 类型定义事件 | `generate` | 产物包含 `Event_*` thunk 与 `LuaEventBridge` 调用 |
+| 配置扩展类 | `generate` | 产物包含 `RegisterExtensions` 与 `RegisterExtensionMethod` 调用 |
 | 派生类 + 已配置基类 | `generate` | 派生类绑定包含基类字段/属性/方法 |
 | 派生类单独配置 | `generate` | 不生成未配置基类成员 |
 | 类型含 `this[int]` | `generate` | 绑定含 `InstanceIndexer`/`InstanceIndexerSet` |
