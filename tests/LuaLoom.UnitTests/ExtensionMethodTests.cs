@@ -13,6 +13,7 @@ public sealed class ExtensionMethodTests
     public void ExtensionMethod_IsCalledWithInstanceAsFirstArgument()
     {
         using var env = new LuaEnv();
+        env.RegisterExtensionType(typeof(PlayerExtensions));
 
         var results = env.DoString($"""
             local p = {PlayerType}(3)
@@ -26,6 +27,7 @@ public sealed class ExtensionMethodTests
     public void ExtensionMethod_FallsBackFromBinding()
     {
         using var env = new LuaEnv();
+        env.RegisterExtensionType(typeof(PlayerExtensions));
         env.RegisterType(new LuaTypeBinding
         {
             Type = typeof(Player),

@@ -15,7 +15,16 @@ public sealed class CodeGenTests
         Assembly = assemblyPath,
         Output = "generated",
         Namespace = "LuaLoom.Generated",
-        LuaCallCSharp = ["LuaLoom.UnitTests.Sample.Player", "LuaLoom.UnitTests.Sample.Overloads"],
+        LuaCallCSharp =
+        [
+            "LuaLoom.UnitTests.Sample.Player",
+            "LuaLoom.UnitTests.Sample.DerivedPlayer",
+            "LuaLoom.UnitTests.Sample.Overloads",
+            "LuaLoom.UnitTests.Sample.PlayerExtensions",
+            "LuaLoom.UnitTests.Sample.Bag",
+            "LuaLoom.UnitTests.Sample.Parsing",
+            "LuaLoom.UnitTests.Sample.ArrayMethods",
+        ],
         CSharpCallLua =
         [
             "LuaLoom.UnitTests.Sample.IntOp",
@@ -34,7 +43,11 @@ public sealed class CodeGenTests
         Assert.Empty(result.Diagnostics);
         var names = result.Files.Select(static f => f.FileName).OrderBy(static n => n, StringComparer.Ordinal).ToArray();
         Assert.Contains("LuaLoom_UnitTests_Sample_PlayerBinder.g.cs", names);
+        Assert.Contains("LuaLoom_UnitTests_Sample_DerivedPlayerBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_OverloadsBinder.g.cs", names);
+        Assert.Contains("LuaLoom_UnitTests_Sample_BagBinder.g.cs", names);
+        Assert.Contains("LuaLoom_UnitTests_Sample_ParsingBinder.g.cs", names);
+        Assert.Contains("LuaLoom_UnitTests_Sample_ArrayMethodsBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_IntOpInvoker.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_ICalculatorImpl.g.cs", names);
         Assert.Contains("System_Action_int_Invoker.g.cs", names);
@@ -52,11 +65,28 @@ public sealed class CodeGenTests
         var bindings = result.Files.Single(static f => f.FileName == "LuaBindings.g.cs");
         Assert.Contains("new global::System.Action<int>", generic.Content, StringComparison.Ordinal);
         Assert.Contains("typeof(global::System.Action<int>)", bindings.Content, StringComparison.Ordinal);
+        Assert.Contains(
+            "RegisterExtensionType(typeof(global::LuaLoom.UnitTests.Sample.PlayerExtensions))",
+            bindings.Content,
+            StringComparison.Ordinal);
+
+        var bag = result.Files.Single(static f => f.FileName == "LuaLoom_UnitTests_Sample_BagBinder.g.cs");
+        Assert.Contains("InstanceIndexer = IndexerGet", bag.Content, StringComparison.Ordinal);
+        Assert.Contains("InstanceIndexerSet = IndexerSet", bag.Content, StringComparison.Ordinal);
+
+        var parsing = result.Files.Single(static f => f.FileName == "LuaLoom_UnitTests_Sample_ParsingBinder.g.cs");
+        Assert.Contains("out a1", parsing.Content, StringComparison.Ordinal);
+        Assert.Contains("ref a0", parsing.Content, StringComparison.Ordinal);
+        Assert.Contains("count -", parsing.Content, StringComparison.Ordinal);
+
+        var arrays = result.Files.Single(static f => f.FileName == "LuaLoom_UnitTests_Sample_ArrayMethodsBinder.g.cs");
+        Assert.Contains("ReadArray<int>", arrays.Content, StringComparison.Ordinal);
+        Assert.Contains("PushArray<int>", arrays.Content, StringComparison.Ordinal);
         Assert.Matches("^[A-Za-z0-9_]+\\.g\\.cs$", generic.FileName);
     }
 
     [Fact]
-    public void Generate_SkipsAmbiguousObsoleteAndOptionalMethods()
+    public void Generate_EmitsOverloadDispatchAndSkipsObsoleteAndOptionalMethods()
     {
         var config = CreateConfig(typeof(Player).Assembly.Location);
         config.LuaCallCSharp = ["LuaLoom.UnitTests.Sample.Overloads"];
@@ -65,9 +95,41 @@ public sealed class CodeGenTests
 
         Assert.Empty(result.Diagnostics);
         var binder = result.Files.Single(static f => f.FileName == "LuaLoom_UnitTests_Sample_OverloadsBinder.g.cs");
-        Assert.DoesNotContain("Pick", binder.Content, StringComparison.Ordinal);
+        Assert.Contains("Pick", binder.Content, StringComparison.Ordinal);
+        Assert.Contains("IsInteger", binder.Content, StringComparison.Ordinal);
+        Assert.Contains("Optional", binder.Content, StringComparison.Ordinal);
         Assert.DoesNotContain("Legacy", binder.Content, StringComparison.Ordinal);
-        Assert.DoesNotContain("Optional", binder.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Generate_InheritedMembersOnlyWhenBaseIsConfigured()
+    {
+        var config = CreateConfig(typeof(Player).Assembly.Location);
+        config.LuaCallCSharp = ["LuaLoom.UnitTests.Sample.DerivedPlayer"];
+
+        var result = CodeGenerator.Generate(config, AppContext.BaseDirectory);
+
+        Assert.Empty(result.Diagnostics);
+        var binder = result.Files.Single(static f => f.FileName == "LuaLoom_UnitTests_Sample_DerivedPlayerBinder.g.cs");
+        Assert.Contains("Bonus", binder.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("case \"Hp\":", binder.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("case \"Name\":", binder.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Generate_InheritedMembersWhenBaseIsConfigured()
+    {
+        var config = CreateConfig(typeof(Player).Assembly.Location);
+        config.LuaCallCSharp = ["LuaLoom.UnitTests.Sample.Player", "LuaLoom.UnitTests.Sample.DerivedPlayer"];
+
+        var result = CodeGenerator.Generate(config, AppContext.BaseDirectory);
+
+        Assert.Empty(result.Diagnostics);
+        var binder = result.Files.Single(static f => f.FileName == "LuaLoom_UnitTests_Sample_DerivedPlayerBinder.g.cs");
+        Assert.Contains("Bonus", binder.Content, StringComparison.Ordinal);
+        Assert.Contains("case \"Hp\":", binder.Content, StringComparison.Ordinal);
+        Assert.Contains("case \"Name\":", binder.Content, StringComparison.Ordinal);
+        Assert.Contains("Double", binder.Content, StringComparison.Ordinal);
     }
 
     [Fact]

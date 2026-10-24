@@ -139,6 +139,44 @@ internal sealed class LuaMarshal : IDisposable
         return new LuaTable(this, id);
     }
 
+    public T[] ReadArray<T>(int index)
+    {
+        if (LuaApi.lua_type(_state, index) != LuaApi.LuaTTable)
+        {
+            throw Conversion("array", index);
+        }
+
+        var length = checked((int)LuaApi.lua_rawlen(_state, index));
+        var values = new T[length];
+        var top = LuaApi.lua_gettop(_state);
+
+        for (var i = 0; i < length; i++)
+        {
+            LuaApi.lua_rawgeti(_state, index, i + 1);
+            values[i] = Read<T>(top + 1);
+            LuaApi.lua_settop(_state, top);
+        }
+
+        return values;
+    }
+
+    public void PushArray<T>(T[]? values)
+    {
+        if (values is null)
+        {
+            LuaApi.lua_pushnil(_state);
+            return;
+        }
+
+        LuaApi.lua_createtable(_state, values.Length, 0);
+        var tableIndex = LuaApi.lua_gettop(_state);
+        for (var i = 0; i < values.Length; i++)
+        {
+            Push(values[i]);
+            LuaApi.lua_rawseti(_state, tableIndex, i + 1);
+        }
+    }
+
     public void RegisterMarshaler(ITypeMarshaler marshaler) => _customMarshalers.Add(marshaler);
 
     public void Push<T>(T value)

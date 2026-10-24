@@ -119,6 +119,11 @@ public static class CodeGenerator
             var binder = Sanitize(type.FullName!) + "Binder";
             files.Add(new GeneratedFile(binder + ".g.cs", EmitTypeBinder(type, binder, config)));
             registrations.Add($"        env.RegisterType(global::{config.Namespace}.{binder}.Create());");
+
+            if (IsExtensionClass(type))
+            {
+                registrations.Add($"        env.RegisterExtensionType(typeof({TypeRef(type)}));");
+            }
         }
 
         foreach (var name in config.CSharpCallLua.Distinct(StringComparer.Ordinal).OrderBy(static n => n, StringComparer.Ordinal))
@@ -378,14 +383,22 @@ public static class CodeGenerator
             .OrderBy(static c => c.GetParameters().Length)
             .ToList();
 
-        var instanceMethods = SupportedMethods(type, BindingFlags.Instance);
-        var staticMethods = SupportedMethods(type, BindingFlags.Static);
-        var instanceProperties = SupportedProperties(type, BindingFlags.Instance);
-        var staticProperties = SupportedProperties(type, BindingFlags.Static);
-        var instanceFields = SupportedFields(type, BindingFlags.Instance);
-        var staticFields = SupportedFields(type, BindingFlags.Static);
+        var includeBase = type.BaseType is not null
+            && config.LuaCallCSharp.Any(name =>
+                string.Equals(name, type.BaseType.FullName, StringComparison.Ordinal));
 
-        var hasInstance = instanceMethods.Count > 0 || instanceProperties.Count > 0 || instanceFields.Count > 0;
+        var instanceMethods = SupportedMethods(type, BindingFlags.Instance, includeBase: includeBase);
+        var staticMethods = SupportedMethods(type, BindingFlags.Static, includeBase: includeBase);
+        var instanceProperties = SupportedProperties(type, BindingFlags.Instance, includeBase: includeBase);
+        var staticProperties = SupportedProperties(type, BindingFlags.Static, includeBase: includeBase);
+        var instanceFields = SupportedFields(type, BindingFlags.Instance, includeBase: includeBase);
+        var staticFields = SupportedFields(type, BindingFlags.Static, includeBase: includeBase);
+        var indexer = FindIndexer(type);
+
+        var hasInstance = instanceMethods.Count > 0
+            || instanceProperties.Count > 0
+            || instanceFields.Count > 0
+            || indexer is not null;
         var hasStatic = staticMethods.Count > 0 || staticProperties.Count > 0 || staticFields.Count > 0;
 
         builder.AppendLine($"internal static class {binder}");
@@ -418,6 +431,15 @@ public static class CodeGenerator
             }
         }
 
+        if (indexer is not null)
+        {
+            builder.AppendLine("        InstanceIndexer = IndexerGet,");
+            if (indexer.SetMethod is not null)
+            {
+                builder.AppendLine("        InstanceIndexerSet = IndexerSet,");
+            }
+        }
+
         builder.AppendLine("    };");
 
         if (constructors.Count > 0)
@@ -433,6 +455,11 @@ public static class CodeGenerator
         if (hasInstance)
         {
             EmitInstanceHandlers(builder, type, instanceMethods, instanceProperties, instanceFields);
+        }
+
+        if (indexer is not null)
+        {
+            EmitIndexerHandlers(builder, type, indexer);
         }
 
         builder.AppendLine("}");
@@ -637,13 +664,86 @@ public static class CodeGenerator
         builder.AppendLine("    }");
     }
 
+    private static void EmitIndexerHandlers(StringBuilder builder, Type type, PropertyInfo indexer)
+    {
+        var keyType = indexer.GetIndexParameters()[0].ParameterType;
+        var valueType = indexer.PropertyType;
+
+        builder.AppendLine();
+        builder.AppendLine("    private static int IndexerGet(global::System.IntPtr L)");
+        builder.AppendLine("    {");
+        builder.AppendLine($"        var self = ({TypeRef(type)})global::LuaLoom.LuaBinding.ReadObject(L, 1)!;");
+        builder.AppendLine($"        var key = {ReadExpression(keyType, 2)};");
+        builder.AppendLine("        var result = self[key];");
+        builder.AppendLine($"        {PushStatement(valueType, "result")}");
+        builder.AppendLine("        return 1;");
+        builder.AppendLine("    }");
+
+        if (indexer.SetMethod is null)
+        {
+            return;
+        }
+
+        builder.AppendLine();
+        builder.AppendLine("    private static int IndexerSet(global::System.IntPtr L)");
+        builder.AppendLine("    {");
+        builder.AppendLine($"        var self = ({TypeRef(type)})global::LuaLoom.LuaBinding.ReadObject(L, 1)!;");
+        builder.AppendLine($"        self[{ReadExpression(keyType, 2)}] = {ReadExpression(valueType, 3)};");
+        builder.AppendLine("        return 0;");
+        builder.AppendLine("    }");
+    }
+
+    private static PropertyInfo? FindIndexer(Type type) =>
+        type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .FirstOrDefault(static p =>
+            {
+                var parameters = p.GetIndexParameters();
+                return parameters.Length == 1
+                    && p.GetMethod is not null
+                    && parameters[0].ParameterType != typeof(string)
+                    && !parameters[0].ParameterType.IsArray
+                    && IsSupportedParameter(parameters[0].ParameterType)
+                    && IsSupportedParameter(p.PropertyType);
+            });
+
     private static void EmitMethodGroup(StringBuilder builder, Type type, string name, List<MethodInfo> overloads, bool isStatic)
     {
-        var byArity = overloads
+        if (overloads.Count == 1 && HasComplexParameters(overloads[0]))
+        {
+            EmitComplexMethodGroup(builder, type, name, overloads[0], isStatic);
+            return;
+        }
+
+        if (overloads.Count == 1
+            && overloads[0].GetParameters().Any(static p => p.HasDefaultValue))
+        {
+            EmitOptionalMethodGroup(builder, type, name, overloads[0], isStatic);
+            return;
+        }
+
+        var groups = overloads
             .GroupBy(static m => m.GetParameters().Length)
-            .Select(static g => g.First())
-            .OrderBy(static m => m.GetParameters().Length)
+            .OrderBy(static g => g.Key)
+            .Select(group => group
+                .OrderByDescending(Specificity)
+                .ToList())
             .ToList();
+
+        var handlerIndex = 0;
+        var handlers = new List<(MethodInfo Method, string Handler)>();
+        var groupHandlers = new List<List<(MethodInfo Method, string Handler)>>();
+        foreach (var group in groups)
+        {
+            var groupEntries = new List<(MethodInfo Method, string Handler)>();
+            foreach (var method in group)
+            {
+                var entry = (method, HandlerName(handlerIndex++, name, isStatic));
+                handlers.Add(entry);
+                groupEntries.Add(entry);
+            }
+
+            groupHandlers.Add(groupEntries);
+        }
 
         var dispatch = HandlerBase(name, isStatic);
         builder.AppendLine();
@@ -657,10 +757,32 @@ public static class CodeGenerator
                 : "        switch (global::LuaLoom.LuaBinding.GetTop(L) - 1)");
         builder.AppendLine("        {");
 
-        for (var i = 0; i < byArity.Count; i++)
+        for (var i = 0; i < groups.Count; i++)
         {
-            var count = byArity[i].GetParameters().Length;
-            builder.AppendLine($"            case {count}: return {HandlerName(i, name, isStatic)}(L);");
+            var count = groups[i][0].GetParameters().Length;
+            var entries = groupHandlers[i];
+
+            if (entries.Count == 1)
+            {
+                builder.AppendLine($"            case {count}: return {entries[0].Handler}(L);");
+                continue;
+            }
+
+            builder.AppendLine($"            case {count}:");
+            foreach (var entry in entries)
+            {
+                var condition = BuildCondition(entry.Method, isStatic ? 1 : 2);
+                if (condition == "true")
+                {
+                    builder.AppendLine($"                return {entry.Handler}(L);");
+                }
+                else
+                {
+                    builder.AppendLine($"                if ({condition}) return {entry.Handler}(L);");
+                }
+            }
+
+            builder.AppendLine("                break;");
         }
 
         builder.AppendLine("            default:");
@@ -670,10 +792,289 @@ public static class CodeGenerator
         builder.AppendLine("        }");
         builder.AppendLine("    }");
 
-        for (var i = 0; i < byArity.Count; i++)
+        foreach (var entry in handlers)
         {
-            EmitMethodImplementation(builder, type, byArity[i], isStatic, HandlerName(i, name, isStatic));
+            EmitMethodImplementation(builder, type, entry.Method, isStatic, entry.Handler);
         }
+    }
+
+    private static void EmitOptionalMethodGroup(
+        StringBuilder builder,
+        Type type,
+        string name,
+        MethodInfo method,
+        bool isStatic)
+    {
+        var parameters = method.GetParameters();
+        var requiredCount = parameters.Count(static p => !p.HasDefaultValue);
+        var dispatch = HandlerBase(name, isStatic);
+        var handlers = new List<(int Count, string Handler)>();
+
+        for (var count = requiredCount; count <= parameters.Length; count++)
+        {
+            handlers.Add((count, HandlerName(count - requiredCount, name, isStatic)));
+        }
+
+        builder.AppendLine();
+        builder.AppendLine($"    private static readonly global::LuaLoom.Native.LuaCSFunction {dispatch} = {dispatch}Dispatch;");
+        builder.AppendLine();
+        builder.AppendLine($"    private static int {dispatch}Dispatch(global::System.IntPtr L)");
+        builder.AppendLine("    {");
+        builder.AppendLine(
+            isStatic
+                ? "        switch (global::LuaLoom.LuaBinding.GetTop(L))"
+                : "        switch (global::LuaLoom.LuaBinding.GetTop(L) - 1)");
+        builder.AppendLine("        {");
+
+        foreach (var (count, handler) in handlers)
+        {
+            builder.AppendLine($"            case {count}: return {handler}(L);");
+        }
+
+        builder.AppendLine("            default:");
+        builder.AppendLine(
+            $"                global::LuaLoom.LuaBinding.Throw(L, \"No matching overload for '{type.Name}.{name}'.\");");
+        builder.AppendLine("                return 0;");
+        builder.AppendLine("        }");
+        builder.AppendLine("    }");
+
+        foreach (var (count, handler) in handlers)
+        {
+            EmitMethodImplementation(builder, type, method, isStatic, handler, count);
+        }
+    }
+
+    private static void EmitComplexMethodGroup(
+        StringBuilder builder,
+        Type type,
+        string name,
+        MethodInfo method,
+        bool isStatic)
+    {
+        var parameters = method.GetParameters();
+        var hasParams = parameters.Any(IsParamArray);
+        var fixedCount = parameters.Count(static p => !p.IsOut && !IsParamArray(p));
+        var handler = HandlerName(0, name, isStatic);
+        var dispatch = HandlerBase(name, isStatic);
+
+        builder.AppendLine();
+        builder.AppendLine($"    private static readonly global::LuaLoom.Native.LuaCSFunction {dispatch} = {dispatch}Dispatch;");
+        builder.AppendLine();
+        builder.AppendLine($"    private static int {dispatch}Dispatch(global::System.IntPtr L)");
+        builder.AppendLine("    {");
+        builder.AppendLine(
+            isStatic
+                ? "        var count = global::LuaLoom.LuaBinding.GetTop(L);"
+                : "        var count = global::LuaLoom.LuaBinding.GetTop(L) - 1;");
+
+        if (hasParams)
+        {
+            builder.AppendLine($"        if (count < {fixedCount})");
+        }
+        else
+        {
+            builder.AppendLine($"        if (count != {fixedCount})");
+        }
+
+        builder.AppendLine("        {");
+        builder.AppendLine(
+            $"            global::LuaLoom.LuaBinding.Throw(L, \"No matching overload for '{type.Name}.{name}'.\");");
+        builder.AppendLine("            return 0;");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine($"        return {handler}(L);");
+        builder.AppendLine("    }");
+
+        EmitMethodImplementation(builder, type, method, isStatic, handler);
+    }
+
+    private static string BuildCondition(MethodInfo method, int firstIndex)
+    {
+        var conditions = new List<string>();
+        var parameters = method.GetParameters();
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var condition = ConditionFor(parameters[i].ParameterType, firstIndex + i);
+            if (condition is not null)
+            {
+                conditions.Add(condition);
+            }
+        }
+
+        return conditions.Count == 0 ? "true" : string.Join(" && ", conditions);
+    }
+
+    private static string DefaultExpression(ParameterInfo parameter)
+    {
+        var value = parameter.RawDefaultValue;
+        if (value is null || value is DBNull || value == Type.Missing)
+        {
+            return "null";
+        }
+
+        var type = parameter.ParameterType;
+        if (type.IsEnum)
+        {
+            return $"({TypeRef(type)})({Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture)})";
+        }
+
+        if (value is string text)
+        {
+            return "\"" + text
+                .Replace("\\", "\\\\", StringComparison.Ordinal)
+                .Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+        }
+
+        if (value is char character)
+        {
+            return "'" + (character switch
+            {
+                '\\' => "\\\\",
+                '\'' => "\\'",
+                '\n' => "\\n",
+                '\r' => "\\r",
+                '\t' => "\\t",
+                _ => character.ToString(),
+            }) + "'";
+        }
+
+        if (value is bool boolean)
+        {
+            return boolean ? "true" : "false";
+        }
+
+        var textValue = Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)
+            ?? "default";
+        if (type == typeof(float))
+        {
+            return textValue + "f";
+        }
+
+        if (type == typeof(decimal))
+        {
+            return textValue + "m";
+        }
+
+        if (type == typeof(long))
+        {
+            return textValue + "L";
+        }
+
+        if (type == typeof(uint))
+        {
+            return textValue + "U";
+        }
+
+        if (type == typeof(ulong))
+        {
+            return textValue + "UL";
+        }
+
+        return textValue;
+    }
+
+    private static string? ConditionFor(Type type, int index)
+    {
+        if (Is(type, typeof(object)))
+        {
+            return null;
+        }
+
+        if (Is(type, typeof(string)) || Is(type, typeof(char)))
+        {
+            return $"global::LuaLoom.LuaBinding.IsString(L, {index})";
+        }
+
+        if (Is(type, typeof(bool)))
+        {
+            return $"global::LuaLoom.LuaBinding.IsBoolean(L, {index})";
+        }
+
+        if (Is(type, typeof(long))
+            || Is(type, typeof(int))
+            || Is(type, typeof(short))
+            || Is(type, typeof(byte))
+            || Is(type, typeof(ushort))
+            || Is(type, typeof(sbyte))
+            || type.IsEnum)
+        {
+            return $"global::LuaLoom.LuaBinding.IsInteger(L, {index})";
+        }
+
+        if (Is(type, typeof(double)) || Is(type, typeof(float)) || Is(type, typeof(decimal)))
+        {
+            return $"global::LuaLoom.LuaBinding.IsNumber(L, {index})";
+        }
+
+        if (Is(type, typeof(LuaTable)))
+        {
+            return $"global::LuaLoom.LuaBinding.IsTable(L, {index})";
+        }
+
+        if (Is(type, typeof(LuaFunction)))
+        {
+            return $"global::LuaLoom.LuaBinding.IsFunction(L, {index})";
+        }
+
+        if (type.IsClass || type.IsInterface)
+        {
+            return $"global::LuaLoom.LuaBinding.IsUserdataOfType<{TypeRef(type)}>(L, {index})";
+        }
+
+        return null;
+    }
+
+    private static int Specificity(MethodInfo method) =>
+        method.GetParameters().Sum(static parameter => ParameterSpecificity(parameter.ParameterType));
+
+    private static int ParameterSpecificity(Type type)
+    {
+        if (Is(type, typeof(string)) || Is(type, typeof(char)))
+        {
+            return 100;
+        }
+
+        if (Is(type, typeof(bool)))
+        {
+            return 90;
+        }
+
+        if (Is(type, typeof(long)))
+        {
+            return 80;
+        }
+
+        if (Is(type, typeof(int)))
+        {
+            return 70;
+        }
+
+        if (Is(type, typeof(double)))
+        {
+            return 60;
+        }
+
+        if (Is(type, typeof(float)))
+        {
+            return 50;
+        }
+
+        if (type.IsEnum)
+        {
+            return 40;
+        }
+
+        if (Is(type, typeof(LuaTable)) || Is(type, typeof(LuaFunction)))
+        {
+            return 35;
+        }
+
+        if (Is(type, typeof(object)))
+        {
+            return 0;
+        }
+
+        return type.IsClass || type.IsInterface ? 30 : 10;
     }
 
     private static void EmitMethodImplementation(
@@ -681,9 +1082,11 @@ public static class CodeGenerator
         Type type,
         MethodInfo method,
         bool isStatic,
-        string handler)
+        string handler,
+        int? providedCount = null)
     {
         var parameters = method.GetParameters();
+        var count = providedCount ?? parameters.Length;
         builder.AppendLine();
         builder.AppendLine($"    private static readonly global::LuaLoom.Native.LuaCSFunction {handler} = {handler}Impl;");
         builder.AppendLine();
@@ -696,28 +1099,120 @@ public static class CodeGenerator
             builder.AppendLine($"        var self = ({TypeRef(type)})global::LuaLoom.LuaBinding.ReadObject(L, 1)!;");
         }
 
-        for (var i = 0; i < parameters.Length; i++)
+        var complex = HasComplexParameters(method);
+        var arguments = new List<string>();
+        if (complex)
         {
-            builder.AppendLine($"        var a{i} = {ReadExpression(parameters[i].ParameterType, argumentOffset + i)};");
+            var cursor = 0;
+            if (parameters.Any(IsParamArray))
+            {
+                builder.AppendLine(
+                    $"        var count = global::LuaLoom.LuaBinding.GetTop(L) - {argumentOffset - 1};");
+            }
+
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                var parameter = parameters[i];
+                if (IsParamArray(parameter))
+                {
+                    var elementType = parameter.ParameterType.GetElementType()!;
+                    builder.AppendLine($"        var a{i} = new {TypeRef(elementType)}[count - {cursor}];");
+                    builder.AppendLine($"        for (var j = 0; j < a{i}.Length; j++)");
+                    builder.AppendLine("        {");
+                    builder.AppendLine(
+                        $"            a{i}[j] = {ReadExpression(elementType, $"{argumentOffset + cursor} + j")};");
+                    builder.AppendLine("        }");
+
+                    arguments.Add($"a{i}");
+                    continue;
+                }
+
+                if (parameter.ParameterType.IsByRef)
+                {
+                    var elementType = parameter.ParameterType.GetElementType()!;
+                    if (parameter.IsOut)
+                    {
+                        builder.AppendLine($"        {TypeRef(elementType)} a{i};");
+                        arguments.Add($"out a{i}");
+                        continue;
+                    }
+
+                    builder.AppendLine($"        var a{i} = {ReadExpression(elementType, argumentOffset + cursor)};");
+                    cursor++;
+                    arguments.Add(parameter.IsIn ? $"in a{i}" : $"ref a{i}");
+                    continue;
+                }
+
+                if (parameter.ParameterType.IsArray && !IsParamArray(parameter))
+                {
+                    var elementType = parameter.ParameterType.GetElementType()!;
+                    builder.AppendLine(
+                        $"        var a{i} = global::LuaLoom.LuaBinding.ReadArray<{TypeRef(elementType)}>(L, {argumentOffset + cursor});");
+                    cursor++;
+                    arguments.Add($"a{i}");
+                    continue;
+                }
+
+                builder.AppendLine(
+                    $"        var a{i} = {ReadExpression(parameter.ParameterType, argumentOffset + cursor)};");
+                cursor++;
+                arguments.Add($"a{i}");
+            }
+        }
+        else
+        {
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                if (i < count)
+                {
+                    builder.AppendLine($"        var a{i} = {ReadExpression(parameters[i].ParameterType, argumentOffset + i)};");
+                    continue;
+                }
+
+                var defaultExpression = DefaultExpression(parameters[i]);
+                if (defaultExpression == "null" && !parameters[i].ParameterType.IsValueType)
+                {
+                    builder.AppendLine($"        var a{i} = ({TypeRef(parameters[i].ParameterType)}?)null;");
+                }
+                else
+                {
+                    builder.AppendLine($"        var a{i} = {defaultExpression};");
+                }
+            }
+
+            arguments.AddRange(Enumerable.Range(0, parameters.Length).Select(static i => "a" + i));
         }
 
-        var arguments = string.Join(", ", Enumerable.Range(0, parameters.Length).Select(static i => "a" + i));
         var invocation = isStatic
-            ? $"{TypeRef(type)}.{method.Name}({arguments})"
-            : $"self.{method.Name}({arguments})";
+            ? $"{TypeRef(type)}.{method.Name}({string.Join(", ", arguments)})"
+            : $"self.{method.Name}({string.Join(", ", arguments)})";
 
+        var resultCount = 0;
         if (Is(method.ReturnType, typeof(void)))
         {
             builder.AppendLine($"        {invocation};");
-            builder.AppendLine("        return 0;");
         }
         else
         {
             builder.AppendLine($"        var result = {invocation};");
             builder.AppendLine($"        {PushStatement(method.ReturnType, "result")}");
-            builder.AppendLine("        return 1;");
+            resultCount++;
         }
 
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var parameter = parameters[i];
+            if (!parameter.ParameterType.IsByRef || (parameter.IsIn && !parameter.IsOut))
+            {
+                continue;
+            }
+
+            builder.AppendLine(
+                $"        {PushStatement(parameter.ParameterType.GetElementType()!, $"a{i}")}");
+            resultCount++;
+        }
+
+        builder.AppendLine($"        return {resultCount};");
         builder.AppendLine("    }");
     }
 
@@ -858,9 +1353,13 @@ public static class CodeGenerator
         builder.AppendLine();
     }
 
-    private static List<MethodInfo> SupportedMethods(Type type, BindingFlags flags, bool forBinding = true)
+    private static List<MethodInfo> SupportedMethods(
+        Type type,
+        BindingFlags flags,
+        bool forBinding = true,
+        bool includeBase = true)
     {
-        const BindingFlags all = BindingFlags.Public | BindingFlags.DeclaredOnly;
+        var all = BindingFlags.Public | (includeBase ? BindingFlags.FlattenHierarchy : BindingFlags.DeclaredOnly);
         var methods = type.GetMethods(flags | all)
             .Where(static m => !m.IsSpecialName && !m.IsGenericMethodDefinition)
             .ToList();
@@ -868,7 +1367,7 @@ public static class CodeGenerator
         if (!forBinding)
         {
             return methods
-                .Where(static m => IsSupportedMethod(m))
+                .Where(static m => IsSupportedSimpleMethod(m))
                 .OrderBy(static m => m.Name, StringComparer.Ordinal)
                 .ThenBy(static m => m.GetParameters().Length)
                 .ToList();
@@ -883,7 +1382,16 @@ public static class CodeGenerator
                 continue;
             }
 
-            if (overloads.GroupBy(static m => m.GetParameters().Length).Any(static g => g.Count() > 1))
+            if (overloads.Count > 1
+                && overloads.Any(static m => HasComplexParameters(m)
+                    || m.GetParameters().Any(static p => p.HasDefaultValue)))
+            {
+                continue;
+            }
+
+            if (overloads.Count == 1
+                && HasComplexParameters(overloads[0])
+                && overloads[0].GetParameters().Any(static p => p.HasDefaultValue))
             {
                 continue;
             }
@@ -897,30 +1405,123 @@ public static class CodeGenerator
             .ToList();
     }
 
-    private static List<PropertyInfo> SupportedProperties(Type type, BindingFlags flags, bool forBinding = true)
+    private static List<PropertyInfo> SupportedProperties(
+        Type type,
+        BindingFlags flags,
+        bool forBinding = true,
+        bool includeBase = true)
     {
-        return type.GetProperties(flags | BindingFlags.Public | BindingFlags.DeclaredOnly)
+        var all = BindingFlags.Public | (includeBase ? BindingFlags.FlattenHierarchy : BindingFlags.DeclaredOnly);
+        var properties = type.GetProperties(flags | all)
             .Where(static p => p.GetIndexParameters().Length == 0 && p.GetMethod is not null)
             .Where(p => !forBinding
                 || (!IsObsolete(p)
                     && !IsObsolete(p.GetMethod)
                     && (p.SetMethod is null || !IsObsolete(p.SetMethod))))
-            .Where(static p => IsSupportedParameter(p.PropertyType))
+            .Where(static p => IsSupportedParameter(p.PropertyType));
+
+        if (includeBase)
+        {
+            properties = properties
+                .GroupBy(static p => p.Name, StringComparer.Ordinal)
+                .Select(group => group
+                    .OrderBy(p => InheritanceDistance(p.DeclaringType, type))
+                    .First());
+        }
+
+        return properties
             .OrderBy(static p => p.Name, StringComparer.Ordinal)
             .ToList();
     }
 
-    private static List<FieldInfo> SupportedFields(Type type, BindingFlags flags)
+    private static List<FieldInfo> SupportedFields(
+        Type type,
+        BindingFlags flags,
+        bool includeBase = true)
     {
-        return type.GetFields(flags | BindingFlags.Public | BindingFlags.DeclaredOnly)
+        var all = BindingFlags.Public | (includeBase ? BindingFlags.FlattenHierarchy : BindingFlags.DeclaredOnly);
+        var fields = type.GetFields(flags | all)
             .Where(static f => !IsObsolete(f))
-            .Where(static f => IsSupportedParameter(f.FieldType))
+            .Where(static f => IsSupportedParameter(f.FieldType));
+
+        if (includeBase)
+        {
+            fields = fields
+                .GroupBy(static f => f.Name, StringComparer.Ordinal)
+                .Select(group => group
+                    .OrderBy(f => InheritanceDistance(f.DeclaringType, type))
+                    .First());
+        }
+
+        return fields
             .OrderBy(static f => f.Name, StringComparer.Ordinal)
             .ToList();
     }
 
-    private static bool IsSupportedMethod(MethodInfo method) =>
-        method.GetParameters().All(static p => IsSupportedParameter(p.ParameterType) && !p.HasDefaultValue);
+    private static int InheritanceDistance(Type? declaringType, Type type)
+    {
+        var distance = 0;
+        for (var current = type; current is not null; current = current.BaseType)
+        {
+            if (current == declaringType)
+            {
+                return distance;
+            }
+
+            distance++;
+        }
+
+        return int.MaxValue;
+    }
+
+    private static bool IsSupportedMethod(MethodInfo method)
+    {
+        foreach (var parameter in method.GetParameters())
+        {
+            if (parameter.ParameterType.IsByRef)
+            {
+                if (!IsSupportedParameter(parameter.ParameterType.GetElementType()!))
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (parameter.ParameterType.IsArray)
+            {
+                if (!IsSupportedParameter(parameter.ParameterType))
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (!IsSupportedParameter(parameter.ParameterType))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsSupportedSimpleMethod(MethodInfo method) =>
+        method.GetParameters().All(static p =>
+            !p.ParameterType.IsByRef
+            && !p.ParameterType.IsArray
+            && IsSupportedParameter(p.ParameterType));
+
+    private static bool HasComplexParameters(MethodInfo method) =>
+        method.GetParameters().Any(static p =>
+            p.ParameterType.IsByRef || p.ParameterType.IsArray);
+
+    private static bool IsParamArray(ParameterInfo parameter) =>
+        parameter.ParameterType.IsArray
+        && parameter.GetCustomAttributesData()
+            .Any(static attribute => attribute.AttributeType.FullName
+                == "System.ParamArrayAttribute");
 
     private static bool IsObsolete(MemberInfo? member) =>
         member is not null
@@ -929,9 +1530,15 @@ public static class CodeGenerator
 
     private static bool IsSupportedParameter(Type type)
     {
-        if (type.IsByRef || type.IsPointer || type.IsGenericParameter || type.IsGenericType || type.IsArray)
+        if (type.IsByRef || type.IsPointer || type.IsGenericParameter || type.IsGenericType)
         {
             return false;
+        }
+
+        if (type.IsArray)
+        {
+            return type.GetArrayRank() == 1
+                && IsSupportedArrayElement(type.GetElementType()!);
         }
 
         return type.IsPrimitive
@@ -940,6 +1547,24 @@ public static class CodeGenerator
             || type.IsClass
             || type.IsValueType;
     }
+
+    private static bool IsSupportedArrayElement(Type type) =>
+        type.IsEnum
+        || Is(type, typeof(bool))
+        || Is(type, typeof(byte))
+        || Is(type, typeof(sbyte))
+        || Is(type, typeof(short))
+        || Is(type, typeof(ushort))
+        || Is(type, typeof(int))
+        || Is(type, typeof(uint))
+        || Is(type, typeof(long))
+        || Is(type, typeof(ulong))
+        || Is(type, typeof(float))
+        || Is(type, typeof(double))
+        || Is(type, typeof(string))
+        || Is(type, typeof(object))
+        || Is(type, typeof(LuaTable))
+        || Is(type, typeof(LuaFunction));
 
     private static string HandlerBase(string name, bool isStatic) =>
         $"{(isStatic ? "Static" : "Instance")}_{name}";
@@ -1015,7 +1640,10 @@ public static class CodeGenerator
         return builder.ToString();
     }
 
-    private static string ReadExpression(Type type, int index)
+    private static string ReadExpression(Type type, int index) =>
+        ReadExpression(type, index.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+    private static string ReadExpression(Type type, string index)
     {
         if (Is(type, typeof(int)))
         {
@@ -1045,6 +1673,11 @@ public static class CodeGenerator
         if (Is(type, typeof(string)))
         {
             return $"global::LuaLoom.LuaBinding.ReadString(L, {index})!";
+        }
+
+        if (type.IsArray && type.GetArrayRank() == 1)
+        {
+            return $"global::LuaLoom.LuaBinding.ReadArray<{TypeRef(type.GetElementType()!)}>(L, {index})";
         }
 
         if (type.IsEnum)
@@ -1080,6 +1713,11 @@ public static class CodeGenerator
         if (Is(type, typeof(string)))
         {
             return $"global::LuaLoom.LuaBinding.PushString(L, {expression});";
+        }
+
+        if (type.IsArray && type.GetArrayRank() == 1)
+        {
+            return $"global::LuaLoom.LuaBinding.PushArray<{TypeRef(type.GetElementType()!)}>(L, {expression});";
         }
 
         if (type.IsEnum)
@@ -1164,5 +1802,18 @@ public static class CodeGenerator
         }
 
         return false;
+    }
+
+    private static bool IsExtensionClass(Type type)
+    {
+        if (!type.IsAbstract || !type.IsSealed)
+        {
+            return false;
+        }
+
+        return type.GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Any(method => method.GetCustomAttributesData()
+                .Any(attribute => attribute.AttributeType.FullName
+                    == typeof(System.Runtime.CompilerServices.ExtensionAttribute).FullName));
     }
 }

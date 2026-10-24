@@ -1,3 +1,5 @@
+using System.Reflection;
+
 namespace LuaLoom;
 
 public sealed partial class LuaEnv
@@ -6,6 +8,8 @@ public sealed partial class LuaEnv
     private readonly Dictionary<string, LuaTypeBinding> _typeBindingsByName = new(StringComparer.Ordinal);
     private readonly Dictionary<Type, ILuaDelegateInvoker> _delegateBindings = new();
     private readonly Dictionary<Type, Func<LuaTable, object>> _interfaceBindings = new();
+    private readonly List<Type> _extensionTypes = new();
+    private readonly Dictionary<(Type Type, string Name), (bool Found, MethodInfo? Method)> _extensionCache = new();
 
     public void RegisterType(LuaTypeBinding binding)
     {
@@ -29,6 +33,38 @@ public sealed partial class LuaEnv
         ArgumentNullException.ThrowIfNull(factory);
         EnsureReady();
         _interfaceBindings[interfaceType] = factory;
+    }
+
+    /// <summary>注册一个静态扩展方法类；只有注册过的扩展方法才可见。</summary>
+    public void RegisterExtensionType(Type extensionType)
+    {
+        ArgumentNullException.ThrowIfNull(extensionType);
+        if (!extensionType.IsAbstract || !extensionType.IsSealed)
+        {
+            throw new ArgumentException(
+                $"Extension type '{extensionType.FullName}' must be a static class.",
+                nameof(extensionType));
+        }
+
+        EnsureReady();
+        if (!_extensionTypes.Contains(extensionType))
+        {
+            _extensionTypes.Add(extensionType);
+            _extensionCache.Clear();
+        }
+    }
+
+    internal MethodInfo? FindExtensionMethod(Type type, string name)
+    {
+        var key = (type, name);
+        if (_extensionCache.TryGetValue(key, out var cached))
+        {
+            return cached.Found ? cached.Method : null;
+        }
+
+        var method = Interop.SearchExtensionMethod(_extensionTypes, type, name);
+        _extensionCache[key] = (method is not null, method);
+        return method;
     }
 
     internal bool TryGetDelegate(Type type, out ILuaDelegateInvoker invoker) =>

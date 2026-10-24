@@ -83,6 +83,45 @@ public static class LuaBinding
     public static object? ReadObject(IntPtr state, int index) =>
         LuaMarshalRegistry.Get(state).ReadObject(index);
 
+    public static T[] ReadArray<T>(IntPtr state, int index) =>
+        LuaMarshalRegistry.Get(state).ReadArray<T>(index);
+
+    public static void PushArray<T>(IntPtr state, T[]? values) =>
+        LuaMarshalRegistry.Get(state).PushArray(values);
+
+    public static bool IsNil(IntPtr state, int index) =>
+        LuaApi.lua_type(state, index) == LuaApi.LuaTNil;
+
+    public static bool IsBoolean(IntPtr state, int index) =>
+        LuaApi.lua_type(state, index) == LuaApi.LuaTBoolean;
+
+    public static bool IsNumber(IntPtr state, int index) =>
+        LuaApi.lua_type(state, index) == LuaApi.LuaTNumber;
+
+    public static bool IsInteger(IntPtr state, int index)
+    {
+        if (LuaApi.lua_type(state, index) != LuaApi.LuaTNumber)
+        {
+            return false;
+        }
+
+        LuaApi.lua_tointegerx(state, index, out var isInteger);
+        return isInteger != 0;
+    }
+
+    public static bool IsString(IntPtr state, int index) =>
+        LuaApi.lua_type(state, index) == LuaApi.LuaTString;
+
+    public static bool IsTable(IntPtr state, int index) =>
+        LuaApi.lua_type(state, index) == LuaApi.LuaTTable;
+
+    public static bool IsFunction(IntPtr state, int index) =>
+        LuaApi.lua_type(state, index) == LuaApi.LuaTFunction;
+
+    public static bool IsUserdataOfType<T>(IntPtr state, int index) =>
+        LuaApi.lua_type(state, index) == LuaApi.LuaTUserData
+        && LuaMarshalRegistry.Get(state).GetObjectFromUserdata(index) is T;
+
     public static T ReadStruct<T>(IntPtr state, int index)
         where T : struct => StructCodec.Read<T>(state, index);
 

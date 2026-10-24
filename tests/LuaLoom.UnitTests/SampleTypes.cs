@@ -25,6 +25,11 @@ public class Player
     public static int Double(int value) => value * 2;
 }
 
+public sealed class DerivedPlayer : Player
+{
+    public int Bonus;
+}
+
 public class Config
 {
     public int Hp;
@@ -167,6 +172,31 @@ public static class Overloads
 
     [Obsolete("Use Optional.")]
     public static int Legacy() => 1;
+}
+
+public static class ArrayMethods
+{
+    public static int Sum(int[] values)
+    {
+        var total = 0;
+        foreach (var value in values)
+        {
+            total += value;
+        }
+
+        return total;
+    }
+
+    public static int[] Double(int[] values)
+    {
+        var result = new int[values.Length];
+        for (var i = 0; i < values.Length; i++)
+        {
+            result[i] = values[i] * 2;
+        }
+
+        return result;
+    }
 }
 
 public sealed class NumberList

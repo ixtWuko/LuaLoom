@@ -39,7 +39,6 @@ internal static class Interop
 
     private static readonly ConcurrentDictionary<IntPtr, LuaEnv> Environments = new();
     private static readonly ConcurrentDictionary<string, Type?> TypeCache = new();
-    private static readonly ConcurrentDictionary<(Type Type, string Name), (bool Found, MethodInfo? Method)> ExtensionCache = new();
 
     private static readonly (string LuaName, string MethodName)[] Operators =
     [
@@ -294,6 +293,17 @@ internal static class Interop
 
         if (LuaApi.lua_type(s, 2) != LuaApi.LuaTString)
         {
+            if (environment.TryGetTypeBinding(instance.GetType(), out var indexerBinding)
+                && indexerBinding.InstanceIndexer is not null)
+            {
+                var top = LuaApi.lua_gettop(s);
+                var results = indexerBinding.InstanceIndexer(s);
+                if (results > 0 || LuaApi.lua_gettop(s) > top)
+                {
+                    return results;
+                }
+            }
+
             return ReadIndexer(environment, s, instance);
         }
 
@@ -341,7 +351,7 @@ internal static class Interop
             return 1;
         }
 
-        var extension = FindExtensionMethod(type, name);
+        var extension = environment.FindExtensionMethod(type, name);
         if (extension is not null)
         {
             LuaApi.lua_pushstring(s, extension.DeclaringType!.FullName!);
@@ -362,6 +372,19 @@ internal static class Interop
 
         if (LuaApi.lua_type(s, 2) != LuaApi.LuaTString)
         {
+            if (environment.TryGetTypeBinding(instance.GetType(), out var indexerBinding)
+                && indexerBinding.InstanceIndexerSet is not null)
+            {
+                var top = LuaApi.lua_gettop(s);
+                var results = indexerBinding.InstanceIndexerSet(s);
+                if (results == 0)
+                {
+                    return 0;
+                }
+
+                LuaApi.lua_settop(s, top);
+            }
+
             return WriteIndexer(environment, s, instance);
         }
 
@@ -522,58 +545,33 @@ internal static class Interop
         type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .FirstOrDefault(static p => p.GetIndexParameters().Length == 1);
 
-    private static MethodInfo? FindExtensionMethod(Type type, string name)
+    internal static MethodInfo? SearchExtensionMethod(
+        IReadOnlyList<Type> extensionTypes,
+        Type type,
+        string name)
     {
-        var key = (type, name);
-        if (ExtensionCache.TryGetValue(key, out var cached))
+        foreach (var candidate in extensionTypes)
         {
-            return cached.Found ? cached.Method : null;
-        }
-
-        var method = SearchExtensionMethod(type, name);
-        ExtensionCache[key] = (method is not null, method);
-        return method;
-    }
-
-    private static MethodInfo? SearchExtensionMethod(Type type, string name)
-    {
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            Type[] types;
-            try
+            foreach (var method in candidate
+                .GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .OrderBy(static m => m.Name, StringComparer.Ordinal)
+                .ThenBy(static m => m.GetParameters().Length))
             {
-                types = assembly.GetTypes();
-            }
-            catch (ReflectionTypeLoadException exception)
-            {
-                types = exception.Types.Where(static t => t is not null).Cast<Type>().ToArray();
-            }
-
-            foreach (var candidate in types
-                .Where(static t => t.IsAbstract && t.IsSealed)
-                .OrderBy(static t => t.FullName, StringComparer.Ordinal))
-            {
-                foreach (var method in candidate
-                    .GetMethods(BindingFlags.Public | BindingFlags.Static)
-                    .OrderBy(static m => m.Name, StringComparer.Ordinal)
-                    .ThenBy(static m => m.GetParameters().Length))
+                if (method.Name != name
+                    || method.IsGenericMethodDefinition
+                    || !method.IsDefined(typeof(ExtensionAttribute), inherit: false))
                 {
-                    if (method.Name != name
-                        || method.IsGenericMethodDefinition
-                        || !method.IsDefined(typeof(ExtensionAttribute), inherit: false))
-                    {
-                        continue;
-                    }
-
-                    var parameters = method.GetParameters();
-                    if (parameters.Length == 0
-                        || !parameters[0].ParameterType.IsAssignableFrom(type))
-                    {
-                        continue;
-                    }
-
-                    return method;
+                    continue;
                 }
+
+                var parameters = method.GetParameters();
+                if (parameters.Length == 0
+                    || !parameters[0].ParameterType.IsAssignableFrom(type))
+                {
+                    continue;
+                }
+
+                return method;
             }
         }
 

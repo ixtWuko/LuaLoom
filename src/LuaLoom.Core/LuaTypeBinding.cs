@@ -35,4 +35,15 @@ public sealed class LuaTypeBinding
     /// 压入 <c>nil</c> 并返回 1 表示未处理，运行时回落到反射。
     /// </summary>
     public LuaCSFunction? InstanceNewIndex { get; init; }
+
+    /// <summary>
+    /// 对应非字符串键的索引器读取：参数为 (userdata, 键)。返回 0 且不压栈表示未处理。
+    /// </summary>
+    public LuaCSFunction? InstanceIndexer { get; init; }
+
+    /// <summary>
+    /// 对应非字符串键的索引器写入：参数为 (userdata, 键, 值)。返回 0 表示已处理；
+    /// 压入 <c>nil</c> 并返回 1 表示未处理。
+    /// </summary>
+    public LuaCSFunction? InstanceIndexerSet { get; init; }
 }
