@@ -101,6 +101,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | `<Delegate>.g.cs` | 实现 `ILuaDelegateInvoker.Create(LuaFunction)`，返回按参数类型直接调 `LuaBinding` 原语的 delegate |
 | `<Interface>.g.cs` | 实现接口，成员转成表字段与方法调用 |
 | `LuaBindings.g.cs` | 显式注册入口 `LuaBindings.Register(LuaEnv env)`，把类型绑定与 invoker 注册进环境 |
+| `link.xml` | 按配置类型生成 IL2CPP 裁剪保留清单 |
 
 **算法**
 
@@ -110,7 +111,8 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 4. 对 delegate/interface 生成 invoker 或实现类；配置中的静态扩展类额外生成 `RegisterExtensionType` 与 `RegisterExtensions` 分派表；类型绑定包含非字符串键索引器、操作符与事件订阅 thunk。同参数个数的方法重载按 Lua 类型条件分派（字符串、布尔、整数、数值、userdata 等），无法覆盖的组合仍回退反射；单方法默认值参数按实参个数生成多个分支并补齐缺省值；单方法 `ref`/`out`/`params` 生成参数装配与多返回值；一维数组通过 `LuaBinding.ReadArray<T>` / `PushArray<T>` 编解码。闭合泛型 delegate 的 `TypeRef` 递归输出 `global::Namespace.Type<...>`，文件名用 `TypeRef` 做字符白名单替换，避免写入尖括号、逗号与程序集限定名。
 5. 用 `CSharpSyntaxTree.ParseText` 做语法校验；真正的编译校验放在测试里，用 `CSharpCompilation` 对产物做一次 Emit。
 6. 通过后按文件名 `Ordinal` 排序写文件，UTF-8 无 BOM，换行 `\n`。
-7. `check` 模式重新生成到内存，与磁盘文件逐字节比较，差异输出文件清单。
+7. 按配置类型生成 `link.xml`，避免 Unity IL2CPP 裁剪反射/生成所需元数据；XML 文件跳过 C# 语法校验。
+8. `check` 模式重新生成到内存，与磁盘文件逐字节比较，差异输出文件清单。
 
 **复杂度**：O(类型数 × 成员数)；生成 100 个类型的耗时上限在模块验收中定为 5 秒以内（本机）。
 
@@ -169,6 +171,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 类型定义 `+`/`==` 等操作符 | `generate` | 产物包含 `Operators` 字典，编译通过 |
 | 类型定义事件 | `generate` | 产物包含 `Event_*` thunk 与 `LuaEventBridge` 调用 |
 | 配置扩展类 | `generate` | 产物包含 `RegisterExtensions` 与 `RegisterExtensionMethod` 调用 |
+| 配置类型 | `generate` | 产物包含 `link.xml`，按程序集列出保留类型 |
 | 派生类 + 已配置基类 | `generate` | 派生类绑定包含基类字段/属性/方法 |
 | 派生类单独配置 | `generate` | 不生成未配置基类成员 |
 | 类型含 `this[int]` | `generate` | 绑定含 `InstanceIndexer`/`InstanceIndexerSet` |

@@ -1,0 +1,6 @@
+<linker>
+  <assembly fullname="LuaLoom.Sample.Types">
+    <type fullname="LuaLoom.Sample.IntCallback" preserve="all" />
+    <type fullname="LuaLoom.Sample.Player" preserve="all" />
+  </assembly>
+</linker>

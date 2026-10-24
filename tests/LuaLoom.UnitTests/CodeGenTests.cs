@@ -68,6 +68,7 @@ public sealed class CodeGenTests
             static name => name.StartsWith("LuaLoom_UnitTests_Sample_Mapper_", StringComparison.Ordinal)
                 && name.EndsWith("Invoker.g.cs", StringComparison.Ordinal));
         Assert.Contains("LuaBindings.g.cs", names);
+        Assert.Contains("link.xml", names);
 
         var generic = result.Files.Single(static f => f.FileName == "System_Action_int_Invoker.g.cs");
         var bindings = result.Files.Single(static f => f.FileName == "LuaBindings.g.cs");
@@ -228,7 +229,8 @@ public sealed class CodeGenTests
 
         var compilation = CSharpCompilation.Create(
             "LuaLoom.Generated.Tests",
-            result.Files.Select(static file => CSharpSyntaxTree.ParseText(file.Content)),
+            result.Files.Where(static file => file.IsCode)
+                .Select(static file => CSharpSyntaxTree.ParseText(file.Content)),
             references,
             new CSharpCompilationOptions(
                 OutputKind.DynamicallyLinkedLibrary,

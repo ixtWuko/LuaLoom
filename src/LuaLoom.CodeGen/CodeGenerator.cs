@@ -19,7 +19,7 @@ public sealed class GeneratorConfig
     public string[] CSharpCallLua { get; set; } = [];
 }
 
-public sealed record GeneratedFile(string FileName, string Content);
+public sealed record GeneratedFile(string FileName, string Content, bool IsCode = true);
 
 public sealed record Diagnostic(string Code, string Message);
 
@@ -97,6 +97,7 @@ public static class CodeGenerator
         var files = new List<GeneratedFile>();
         var diagnostics = new List<Diagnostic>();
         var registrations = new List<string>();
+        var referencedTypes = new List<Type>();
 
         using var context = CreateContext(assemblyPath);
         var assembly = context.LoadFromAssemblyPath(assemblyPath);
@@ -129,6 +130,7 @@ public static class CodeGenerator
                 continue;
             }
 
+            referencedTypes.Add(type);
             var binder = Sanitize(type.FullName!) + "Binder";
             files.Add(new GeneratedFile(binder + ".g.cs", EmitTypeBinder(type, binder, config)));
             registrations.Add($"        env.RegisterType(global::{config.Namespace}.{binder}.Create());");
@@ -169,6 +171,7 @@ public static class CodeGenerator
                 continue;
             }
 
+            referencedTypes.Add(type);
             if (IsDelegateType(type))
             {
                 var invoker = FileStem(type) + "Invoker";
@@ -190,8 +193,9 @@ public static class CodeGenerator
         }
 
         files.Add(new GeneratedFile("LuaBindings.g.cs", EmitRegistration(config, registrations)));
+        files.Add(new GeneratedFile("link.xml", EmitLinkXml(referencedTypes), IsCode: false));
 
-        foreach (var file in files)
+        foreach (var file in files.Where(static f => f.IsCode))
         {
             var tree = CSharpSyntaxTree.ParseText(file.Content);
             foreach (var error in tree.GetDiagnostics().Where(static d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error))
@@ -201,7 +205,10 @@ public static class CodeGenerator
         }
 
         files = files
-            .Select(static f => new GeneratedFile(f.FileName, f.Content.Replace("\r\n", "\n", StringComparison.Ordinal)))
+            .Select(static f => new GeneratedFile(
+                f.FileName,
+                f.Content.Replace("\r\n", "\n", StringComparison.Ordinal),
+                f.IsCode))
             .ToList();
         files.Sort(static (a, b) => string.CompareOrdinal(a.FileName, b.FileName));
         return new GenerationResult(files, diagnostics);
@@ -1471,6 +1478,36 @@ public static class CodeGenerator
         builder.AppendLine("}");
         return builder.ToString();
     }
+
+    private static string EmitLinkXml(IEnumerable<Type> types)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("<linker>");
+
+        foreach (var assembly in types
+            .Where(static t => !string.IsNullOrEmpty(t.FullName))
+            .Distinct()
+            .GroupBy(static t => t.Assembly.GetName().Name ?? "unknown", StringComparer.Ordinal)
+            .OrderBy(static g => g.Key, StringComparer.Ordinal))
+        {
+            builder.AppendLine($"  <assembly fullname=\"{EscapeXml(assembly.Key)}\">");
+            foreach (var type in assembly.OrderBy(static t => t.FullName, StringComparer.Ordinal))
+            {
+                builder.AppendLine($"    <type fullname=\"{EscapeXml(type.FullName!)}\" preserve=\"all\" />");
+            }
+
+            builder.AppendLine("  </assembly>");
+        }
+
+        builder.AppendLine("</linker>");
+        return builder.ToString();
+    }
+
+    private static string EscapeXml(string value) => value
+        .Replace("&", "&amp;", StringComparison.Ordinal)
+        .Replace("\"", "&quot;", StringComparison.Ordinal)
+        .Replace("<", "&lt;", StringComparison.Ordinal)
+        .Replace(">", "&gt;", StringComparison.Ordinal);
 
     private static string EmitRegistration(GeneratorConfig config, List<string> registrations)
     {
