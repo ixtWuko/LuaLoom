@@ -10,6 +10,19 @@ public sealed class DecimalBindingTests
     private const string DecimalType = "CS.LuaLoom.UnitTests.Sample.DecimalMethods";
 
     [Fact]
+    public void Decimal_ReflectionPathReadsStructUserdata()
+    {
+        using var env = new LuaEnv();
+
+        var results = env.DoString($"""
+            local value = {DecimalType}.Make()
+            return {DecimalType}.ToInt(value)
+            """);
+
+        Assert.Equal(12L, results[0]);
+    }
+
+    [Fact]
     public void Decimal_RoundTripsThroughUserdata()
     {
         using var env = new LuaEnv();

@@ -6,6 +6,8 @@ using NativeMarshal = System.Runtime.InteropServices.Marshal;
 
 namespace LuaLoom.Internal;
 
+internal sealed record LuaStructValue(byte[] Bytes);
+
 /// <summary>
 /// 唯一允许操作 Lua 栈的业务层：类型编解码、引用表、对象身份表。
 /// </summary>
@@ -427,9 +429,35 @@ internal sealed class LuaMarshal : IDisposable
             LuaApi.LuaTString => ReadString(index),
             LuaApi.LuaTTable => CreateReference(typeof(LuaTable), index),
             LuaApi.LuaTFunction => CreateReference(typeof(LuaFunction), index),
-            LuaApi.LuaTUserData => ReadObjectUserdata(index),
+            LuaApi.LuaTUserData => ReadUserdataObject(index),
             _ => throw Conversion("object", index),
         };
+    }
+
+    private object ReadUserdataObject(int index)
+    {
+        var value = GetObjectFromUserdata(index);
+        if (value is not null)
+        {
+            return value;
+        }
+
+        if (LuaApi.lua_getmetatable(_state, index) != 0)
+        {
+            LuaApi.lua_settop(_state, LuaApi.lua_gettop(_state) - 1);
+            throw Conversion("object", index);
+        }
+
+        var length = checked((int)LuaApi.lua_rawlen(_state, index));
+        var pointer = LuaApi.lua_touserdata(_state, index);
+        if (length == 0 || pointer == IntPtr.Zero)
+        {
+            throw Conversion("object", index);
+        }
+
+        var bytes = new byte[length];
+        NativeMarshal.Copy(pointer, bytes, 0, length);
+        return new LuaStructValue(bytes);
     }
 
     public object? Read(Type type, int index)

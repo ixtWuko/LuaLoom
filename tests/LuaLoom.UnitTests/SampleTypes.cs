@@ -277,6 +277,10 @@ public static class PointMath
 
 public static class DecimalMethods
 {
+    public static decimal Make() => 12.5m;
+
+    public static int ToInt(decimal value) => (int)value;
+
     public static decimal Echo(decimal value) => value;
 
     public static decimal Add(decimal left, decimal right) => left + right;

@@ -176,7 +176,7 @@ id 的复用交给 `luaL_ref` 自带的空闲链，不再维护第二套。
 | `string` | string | UTF-8 编码 |
 | `byte[]` | string | 零拷贝读取需长度前缀，P0 走复制 |
 | 枚举 | integer | 底层类型转换 |
-| `decimal` | userdata（内联 16 字节） | 生成路径用 `PushStruct`/`ReadStruct` 无损传递；反射路径暂不自动识别 |
+| `decimal` | userdata（内联 16 字节） | 生成路径用 `PushStruct`/`ReadStruct` 无损传递；反射路径把无 metatable 的 16 字节 userdata 还原为 decimal |
 | 纯值类型 struct | userdata（内联字节） | 仅 blittable 字段，可嵌套；要求 `LayoutKind.Sequential` |
 | 类实例 | userdata + 对象 id | `__gc` 时释放 id |
 | `LuaTable`/`LuaFunction` | table/function | 通过引用 id 关联 |

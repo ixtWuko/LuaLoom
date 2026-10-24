@@ -1453,6 +1453,13 @@ internal static class Interop
                 : null;
         }
 
+        if (value is LuaStructValue rawStruct
+            && underlying == typeof(decimal)
+            && rawStruct.Bytes.Length == 16)
+        {
+            return System.Runtime.InteropServices.MemoryMarshal.Read<decimal>(rawStruct.Bytes);
+        }
+
         if (value is LuaTable table
             && underlying != typeof(object)
             && !typeof(LuaReference).IsAssignableFrom(underlying)
