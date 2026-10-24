@@ -179,7 +179,7 @@ pwsh scripts/ci.ps1 -Version 53  # Lua 5.3
 - 平台：Windows x64 本地验证，Linux x64 与 macOS arm64 由 CI 验证；Windows arm64、Linux arm64、iOS/Android/WebGL 未覆盖。不含 LuaJIT。
 - Lua 版本在构建时二选一（5.3.6 / 5.4.9），同一进程不能混用两个版本；5.5 仅预留画像。
 - 虚拟机与句柄是单线程的，跨线程调用抛异常。
-- 生成器覆盖 public 构造、字段、属性、非字符串索引器、方法（含同参数个数重载、单方法默认值/`ref`/`out`/`params`）、受支持元素类型的一维数组参数/返回值、操作符、非泛型与闭合泛型 delegate（如 `Action<int>`）以及接口；继承成员仅在基类也加入 `luaCallCSharp` 时生成。泛型类型、泛型方法、事件、多维数组与类元素数组不在生成范围内，由反射路径处理。扩展类需要加入 `luaCallCSharp`，未配置的扩展方法不可见。绑定未命中的键会自动回落，不会变成 `nil`。已提供 `typeof`、`cast`、`uint64.*`、`xlua.get_generic_method` 等兼容 API；Lua table 作为方法参数时会按 `Cast<T>` 规则转换为 class/struct/interface。
+- 生成器覆盖 public 构造、字段、属性、非字符串索引器、方法（含同参数个数重载、单方法默认值/`ref`/`out`/`params`）、受支持元素类型的一维数组参数/返回值、操作符、非泛型与闭合泛型 delegate（如 `Action<int>`）以及接口；继承成员仅在基类也加入 `luaCallCSharp` 时生成。泛型类型、泛型方法、多维数组与类元素数组不在生成范围内，由反射路径处理。扩展类需要加入 `luaCallCSharp`，未配置的扩展方法不可见。绑定未命中的键会自动回落，不会变成 `nil`。已提供 `typeof`、`cast`、`uint64.*`、`xlua.get_generic_method` 等兼容 API；Lua table 作为方法参数时会按 `Cast<T>` 规则转换为 class/struct/interface。
 - 未生成 delegate 时，`Get<TDelegate>` 会抛异常；接口有 `DispatchProxy` 兜底，事件委托由表达式树现场生成。
 - 不含热补丁、Unity 适配与资源版本管理。
 

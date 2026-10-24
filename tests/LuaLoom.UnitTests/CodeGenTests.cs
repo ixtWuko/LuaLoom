@@ -26,6 +26,7 @@ public sealed class CodeGenTests
             "LuaLoom.UnitTests.Sample.ArrayMethods",
             "LuaLoom.UnitTests.Sample.Money",
             "LuaLoom.UnitTests.Sample.PointMath",
+            "LuaLoom.UnitTests.Sample.Emitter",
         ],
         CSharpCallLua =
         [
@@ -52,6 +53,7 @@ public sealed class CodeGenTests
         Assert.Contains("LuaLoom_UnitTests_Sample_ArrayMethodsBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_MoneyBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_PointMathBinder.g.cs", names);
+        Assert.Contains("LuaLoom_UnitTests_Sample_EmitterBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_IntOpInvoker.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_ICalculatorImpl.g.cs", names);
         Assert.Contains("System_Action_int_Invoker.g.cs", names);
@@ -90,6 +92,10 @@ public sealed class CodeGenTests
         var money = result.Files.Single(static f => f.FileName == "LuaLoom_UnitTests_Sample_MoneyBinder.g.cs");
         Assert.Contains("Operators = new", money.Content, StringComparison.Ordinal);
         Assert.Contains("Operator_Addition", money.Content, StringComparison.Ordinal);
+
+        var emitter = result.Files.Single(static f => f.FileName == "LuaLoom_UnitTests_Sample_EmitterBinder.g.cs");
+        Assert.Contains("Event_Changed", emitter.Content, StringComparison.Ordinal);
+        Assert.Contains("LuaEventBridge.Add", emitter.Content, StringComparison.Ordinal);
         Assert.Matches("^[A-Za-z0-9_]+\\.g\\.cs$", generic.FileName);
     }
 

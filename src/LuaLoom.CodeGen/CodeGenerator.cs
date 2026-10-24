@@ -406,12 +406,14 @@ public static class CodeGenerator
         var staticProperties = SupportedProperties(type, BindingFlags.Static, includeBase: includeBase);
         var instanceFields = SupportedFields(type, BindingFlags.Instance, includeBase: includeBase);
         var staticFields = SupportedFields(type, BindingFlags.Static, includeBase: includeBase);
+        var events = SupportedEvents(type, includeBase);
         var indexer = FindIndexer(type);
         var operators = FindOperators(type);
 
         var hasInstance = instanceMethods.Count > 0
             || instanceProperties.Count > 0
             || instanceFields.Count > 0
+            || events.Count > 0
             || indexer is not null;
         var hasStatic = staticMethods.Count > 0 || staticProperties.Count > 0 || staticFields.Count > 0;
 
@@ -480,7 +482,12 @@ public static class CodeGenerator
 
         if (hasInstance)
         {
-            EmitInstanceHandlers(builder, type, instanceMethods, instanceProperties, instanceFields);
+            EmitInstanceHandlers(builder, type, instanceMethods, instanceProperties, instanceFields, events);
+        }
+
+        if (events.Count > 0)
+        {
+            EmitEventHandlers(builder, type, events);
         }
 
         if (indexer is not null)
@@ -617,7 +624,8 @@ public static class CodeGenerator
         Type type,
         List<MethodInfo> methods,
         List<PropertyInfo> properties,
-        List<FieldInfo> fields)
+        List<FieldInfo> fields,
+        List<EventInfo> events)
     {
         foreach (var group in methods.GroupBy(static m => m.Name, StringComparer.Ordinal))
         {
@@ -651,6 +659,14 @@ public static class CodeGenerator
             builder.AppendLine($"            case \"{group.Key}\":");
             builder.AppendLine(
                 $"                global::LuaLoom.LuaBinding.PushFunction(L, {HandlerBase(group.Key, isStatic: false)});");
+            builder.AppendLine("                return 1;");
+        }
+
+        foreach (var eventInfo in events)
+        {
+            builder.AppendLine($"            case \"{eventInfo.Name}\":");
+            builder.AppendLine(
+                $"                global::LuaLoom.LuaBinding.PushFunction(L, {EventHandlerName(eventInfo)});");
             builder.AppendLine("                return 1;");
         }
 
@@ -1556,6 +1572,102 @@ public static class CodeGenerator
         return properties
             .OrderBy(static p => p.Name, StringComparer.Ordinal)
             .ToList();
+    }
+
+    private static List<EventInfo> SupportedEvents(Type type, bool includeBase)
+    {
+        var all = BindingFlags.Public | BindingFlags.Instance
+            | (includeBase ? BindingFlags.FlattenHierarchy : BindingFlags.DeclaredOnly);
+        var events = type.GetEvents(all)
+            .Where(static e => !IsObsolete(e))
+            .Where(static e => e.EventHandlerType is not null && IsSupportedEventType(e.EventHandlerType))
+            .ToList();
+
+        if (includeBase)
+        {
+            events = events
+                .GroupBy(static e => e.Name, StringComparer.Ordinal)
+                .Select(group => group
+                    .OrderBy(e => InheritanceDistance(e.DeclaringType, type))
+                    .First())
+                .ToList();
+        }
+
+        return events
+            .OrderBy(static e => e.Name, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static bool IsSupportedEventType(Type delegateType)
+    {
+        var invoke = delegateType.GetMethod("Invoke");
+        if (invoke is null)
+        {
+            return false;
+        }
+
+        if (!Is(invoke.ReturnType, typeof(void)) && !IsSupportedParameter(invoke.ReturnType))
+        {
+            return false;
+        }
+
+        return invoke.GetParameters().All(static p =>
+            !p.ParameterType.IsByRef
+            && !p.ParameterType.IsArray
+            && IsSupportedParameter(p.ParameterType));
+    }
+
+    private static string EventHandlerName(EventInfo eventInfo) =>
+        "Event_" + eventInfo.Name;
+
+    private static void EmitEventHandlers(
+        StringBuilder builder,
+        Type type,
+        List<EventInfo> events)
+    {
+        foreach (var eventInfo in events)
+        {
+            var handlerType = eventInfo.EventHandlerType!;
+            var invoke = handlerType.GetMethod("Invoke")!;
+            var parameters = invoke.GetParameters();
+            var argumentNames = Enumerable.Range(0, parameters.Length)
+                .Select(static i => "a" + i)
+                .ToArray();
+            var call = $"function.Call({string.Join(", ", argumentNames)})";
+            var lambda = Is(invoke.ReturnType, typeof(void))
+                ? $"({string.Join(", ", argumentNames)}) => {{ {call}; }}"
+                : $"({string.Join(", ", argumentNames)}) => {ConvertResult(invoke.ReturnType, call)}";
+            var handlerName = EventHandlerName(eventInfo);
+
+            builder.AppendLine();
+            builder.AppendLine($"    private static int {handlerName}(global::System.IntPtr L)");
+            builder.AppendLine("    {");
+            builder.AppendLine($"        var self = ({TypeRef(type)})global::LuaLoom.LuaBinding.ReadObject(L, 1)!;");
+            builder.AppendLine("        var op = global::LuaLoom.LuaBinding.ReadString(L, 2);");
+            builder.AppendLine("        if (op == \"+\")");
+            builder.AppendLine("        {");
+            builder.AppendLine("            var function = global::LuaLoom.LuaBinding.CreateFunction(L, 3);");
+            builder.AppendLine($"            var handler = new {TypeRef(handlerType)}({lambda});");
+            builder.AppendLine(
+                $"            global::LuaLoom.LuaEventBridge.Add(self, \"{eventInfo.Name}\", global::LuaLoom.LuaBinding.GetFunctionPointer(L, 3), handler, function);");
+            builder.AppendLine($"            self.{eventInfo.Name} += handler;");
+            builder.AppendLine("            return 0;");
+            builder.AppendLine("        }");
+            builder.AppendLine("        if (op == \"-\")");
+            builder.AppendLine("        {");
+            builder.AppendLine(
+                $"            var handler = global::LuaLoom.LuaEventBridge.Remove(self, \"{eventInfo.Name}\", global::LuaLoom.LuaBinding.GetFunctionPointer(L, 3));");
+            builder.AppendLine($"            if (handler is {TypeRef(handlerType)} typed)");
+            builder.AppendLine("            {");
+            builder.AppendLine($"                self.{eventInfo.Name} -= typed;");
+            builder.AppendLine("            }");
+            builder.AppendLine("            return 0;");
+            builder.AppendLine("        }");
+            builder.AppendLine(
+                $"        global::LuaLoom.LuaBinding.Throw(L, \"Event operator must be '+' or '-'.\");");
+            builder.AppendLine("        return 0;");
+            builder.AppendLine("    }");
+        }
     }
 
     private static List<FieldInfo> SupportedFields(

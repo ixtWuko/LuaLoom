@@ -102,6 +102,12 @@ public static class LuaBinding
     public static T[] ReadArray<T>(IntPtr state, int index) =>
         LuaMarshalRegistry.Get(state).ReadArray<T>(index);
 
+    public static LuaFunction CreateFunction(IntPtr state, int index) =>
+        LuaMarshalRegistry.Get(state).CreateFunction(index);
+
+    public static IntPtr GetFunctionPointer(IntPtr state, int index) =>
+        LuaApi.lua_topointer(state, index);
+
     public static void PushArray<T>(IntPtr state, T[]? values) =>
         LuaMarshalRegistry.Get(state).PushArray(values);
 
