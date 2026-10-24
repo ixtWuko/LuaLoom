@@ -141,7 +141,7 @@ pwsh scripts/ci.ps1 -Version 53
 - 加载顺序见算法第 1 条；`RuntimeInformation.RuntimeIdentifier` 决定优先查找的 RID 目录。
 - `LuaLoom.Native.csproj` 把当前 RID 的原生库复制到输出目录，`LuaNativeRid` 可由 MSBuild 属性覆盖，便于交叉构建。
 - CMake 统一目标名 `lualoom`，Unix 自动加 `lib` 前缀与 `.so`/`.dylib` 后缀，启用 `POSITION_INDEPENDENT_CODE`，`LUA_BUILD_AS_DLL` 只在 Windows 定义。
-- GitHub Actions 矩阵覆盖 `windows-latest`、`ubuntu-22.04`、`macos-14`，分别执行原生构建、编译、测试、生成物检查与示例。
+- GitHub Actions 矩阵覆盖 `windows-latest`、`ubuntu-22.04`、`macos-14`，分别执行原生构建、编译、测试、生成物检查与示例；另有 `ubuntu-22.04` 的 Lua 5.3 job。
 - 限制：Linux 产物最低 glibc 2.35；macOS `.dylib` 未签名；arm64 Windows/Linux 与移动端未覆盖。
 
 **复杂度**：加载 O(1)（进程内缓存）；守卫 O(1)；`pcall` 封装 O(1)。

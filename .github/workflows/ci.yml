@@ -19,9 +19,9 @@ jobs:
           - os: macos-14
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 8.0.x
 
@@ -37,6 +37,26 @@ jobs:
           dotnet test LuaLoom.sln -c Release --no-build
           dotnet run --project src/LuaLoom.Cli -c Release --no-build -- check --config lua-loom.json
           dotnet run --project samples/LuaLoom.Sample -c Release --no-build
+
+      - name: Show native assets
+        if: failure()
+        shell: pwsh
+        run: |
+          Get-ChildItem artifacts/native -Recurse -File | Select-Object FullName
+          Get-ChildItem artifacts/bin/LuaLoom.UnitTests -Recurse -File -Filter '*lualoom*' | Select-Object FullName
+
+  lua53:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build and test with Lua 5.3
+        shell: pwsh
+        run: pwsh scripts/ci.ps1 -Version 53
 
       - name: Show native assets
         if: failure()
