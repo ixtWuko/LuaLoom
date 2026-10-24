@@ -370,7 +370,11 @@ public static class CodeGenerator
         WriteHeader(builder, config.Namespace);
 
         var constructors = type.GetConstructors()
-            .Where(static c => c.GetParameters().All(static p => IsSupportedParameter(p.ParameterType)))
+            .GroupBy(static c => c.GetParameters().Length)
+            .Where(static g => g.Count() == 1)
+            .Select(static g => g.Single())
+            .Where(static c => !IsObsolete(c)
+                && c.GetParameters().All(static p => IsSupportedParameter(p.ParameterType) && !p.HasDefaultValue))
             .OrderBy(static c => c.GetParameters().Length)
             .ToList();
 
@@ -766,7 +770,7 @@ public static class CodeGenerator
         builder.AppendLine();
         builder.AppendLine($"    public {implementation}(global::LuaLoom.LuaTable table) => _table = table;");
 
-        foreach (var property in SupportedProperties(type, BindingFlags.Instance))
+        foreach (var property in SupportedProperties(type, BindingFlags.Instance, forBinding: false))
         {
             builder.AppendLine();
             builder.AppendLine($"    public {TypeRef(property.PropertyType)} {property.Name}");
@@ -795,7 +799,7 @@ public static class CodeGenerator
             builder.AppendLine("    }");
         }
 
-        foreach (var method in SupportedMethods(type, BindingFlags.Instance))
+        foreach (var method in SupportedMethods(type, BindingFlags.Instance, forBinding: false))
         {
             var parameters = method.GetParameters();
             var signature = string.Join(
@@ -854,21 +858,53 @@ public static class CodeGenerator
         builder.AppendLine();
     }
 
-    private static List<MethodInfo> SupportedMethods(Type type, BindingFlags flags)
+    private static List<MethodInfo> SupportedMethods(Type type, BindingFlags flags, bool forBinding = true)
     {
         const BindingFlags all = BindingFlags.Public | BindingFlags.DeclaredOnly;
-        return type.GetMethods(flags | all)
+        var methods = type.GetMethods(flags | all)
             .Where(static m => !m.IsSpecialName && !m.IsGenericMethodDefinition)
-            .Where(static m => m.GetParameters().All(static p => IsSupportedParameter(p.ParameterType)))
+            .ToList();
+
+        if (!forBinding)
+        {
+            return methods
+                .Where(static m => IsSupportedMethod(m))
+                .OrderBy(static m => m.Name, StringComparer.Ordinal)
+                .ThenBy(static m => m.GetParameters().Length)
+                .ToList();
+        }
+
+        var supported = new List<MethodInfo>();
+        foreach (var group in methods.GroupBy(static m => m.Name, StringComparer.Ordinal))
+        {
+            var overloads = group.ToList();
+            if (overloads.Any(static m => IsObsolete(m) || !IsSupportedMethod(m)))
+            {
+                continue;
+            }
+
+            if (overloads.GroupBy(static m => m.GetParameters().Length).Any(static g => g.Count() > 1))
+            {
+                continue;
+            }
+
+            supported.AddRange(overloads);
+        }
+
+        return supported
             .OrderBy(static m => m.Name, StringComparer.Ordinal)
             .ThenBy(static m => m.GetParameters().Length)
             .ToList();
     }
 
-    private static List<PropertyInfo> SupportedProperties(Type type, BindingFlags flags)
+    private static List<PropertyInfo> SupportedProperties(Type type, BindingFlags flags, bool forBinding = true)
     {
         return type.GetProperties(flags | BindingFlags.Public | BindingFlags.DeclaredOnly)
             .Where(static p => p.GetIndexParameters().Length == 0 && p.GetMethod is not null)
+            .Where(p => !forBinding
+                || (!IsObsolete(p)
+                    && !IsObsolete(p.GetMethod)
+                    && (p.SetMethod is null || !IsObsolete(p.SetMethod))))
             .Where(static p => IsSupportedParameter(p.PropertyType))
             .OrderBy(static p => p.Name, StringComparer.Ordinal)
             .ToList();
@@ -877,10 +913,19 @@ public static class CodeGenerator
     private static List<FieldInfo> SupportedFields(Type type, BindingFlags flags)
     {
         return type.GetFields(flags | BindingFlags.Public | BindingFlags.DeclaredOnly)
+            .Where(static f => !IsObsolete(f))
             .Where(static f => IsSupportedParameter(f.FieldType))
             .OrderBy(static f => f.Name, StringComparer.Ordinal)
             .ToList();
     }
+
+    private static bool IsSupportedMethod(MethodInfo method) =>
+        method.GetParameters().All(static p => IsSupportedParameter(p.ParameterType) && !p.HasDefaultValue);
+
+    private static bool IsObsolete(MemberInfo? member) =>
+        member is not null
+        && member.GetCustomAttributesData()
+            .Any(static attribute => attribute.AttributeType.FullName == typeof(ObsoleteAttribute).FullName);
 
     private static bool IsSupportedParameter(Type type)
     {

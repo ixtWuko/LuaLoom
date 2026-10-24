@@ -16,6 +16,7 @@
 - 泛型方法：`lua_loom_generic(type, 'Method', T1, ...)` 返回已闭合的调用器，静态与实例方法都支持。
 - 绑定只覆盖部分成员时，未命中的键回落到反射：继承成员、事件、含 `out`/`ref`/`params` 的方法仍可调用。
 - `out` / `ref` / `params`：`TryParse('42')` 返回 `true, 42`，`Bump(1)` 返回 `2`，`Join('-', 1, 2, 3)` 得到 `"1-2-3"`。
+- 扩展方法：`p:Triple(2)` 转发到 `PlayerExtensions.Triple(p, 2)`，实例作为第一个参数。
 
 **边界**
 
@@ -31,7 +32,7 @@
 | E2 | 接口映射生成路径返回实现类实例，方法调用直达 Lua 表 | 调方法后 Lua 侧计数变化 |
 | E3 | 未生成 delegate 时抛 `LuaConversionException`，消息提示在 `lua-loom.json` 的 `csharpCallLua` 中加入该委托类型并重新生成 | 断言消息 |
 | E4 | 未生成接口实现时 `DispatchProxy` 兜底可用，方法调用返回正确值 | 不生成接口绑定直接调用 |
-| E5 | 反射重载按「可装配的实参个数」筛选；同形候选取声明顺序第一个 | 构造 `out`、`params` 重载用例 |
+| E5 | 反射重载按「精确类型 > 可转换 > 默认值」评分，取最高分；同分取声明顺序第一个 | `Pick(string)` / `Pick(object)`、`Pick(int)` / `Pick(long)` |
 | E6 | 反射兜底与生成路径对同一成员调用结果一致 | 同一用例跑两遍比对 |
 | E7 | 反射兜底里 C# 抛出的异常转成 Lua 错误，脚本可 `pcall` 捕获 | 脚本断言 |
 | E8 | `Cast<T>` 是值拷贝，C# 侧修改不回写原表 | 修改后读表值不变 |
@@ -44,6 +45,7 @@
 | E15 | 绑定只覆盖部分成员时，未命中的键回落到反射，继承成员与事件仍可用 | 只绑定 `Hp` 后读 `Name`、订阅事件 |
 | E16 | `out` 不消耗实参、`ref` 消耗实参；调用后按「返回值 → `ref`/`out`」返回 | `TryParse('42')` 返回 `true, 42`；`Bump(1)` 返回 `2` |
 | E17 | `params` 把剩余实参打包成数组，允许 0 个实参 | `Join('-', 1, 2, 3)` 与 `Sum()` |
+| E18 | 实例成员未命中时可调用扩展方法，实例作为首参 | `p:Triple(2)` 返回 `p.Hp * 2` |
 
 **非目标**
 
@@ -52,7 +54,7 @@
 - 自定义集合适配（只支持 `Dictionary`、`List` 与数组）。
 - 泛型方法的直接调用（不在基线，后续按需求评估）。
 - 生成路径的 `ref`/`out`/`params` thunk（先由反射承担）。
-- 按类型的精确重载评分（当前同形候选取声明顺序第一个，后续优化）。
+- 泛型扩展方法与扩展方法组的歧义消解（只取第一个匹配的公开静态方法）。
 
 ## 使用与交互设计
 
@@ -162,13 +164,14 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 4. 接口代理兜底：`DispatchProxy.Create<T, LuaInterfaceProxy>()`；`Invoke` 按方法名查表，参数与返回值走 M002，转换失败抛 `LuaConversionException`。
 5. 反射兜底（Lua 调 C#）：按成员名查 `PropertyInfo`/`FieldInfo`/`MethodInfo`/`EventInfo`；绑定 thunk 返回未处理时进入这一层，事件与索引器沿用各自的闭包路径。
 6. 句柄的释放与终结器由 M002 负责，本模块只消费引用 id。
-7. 重载解析：反射路径按参数形状尝试装配，能正好耗尽实参的第一个候选胜出；生成路径按实参个数分派。同形候选仍取声明顺序第一个。
+7. 重载解析：反射路径按参数形状装配并评分，精确类型优先，其次可转换类型，最后是可使用默认值的候选；得分最高者胜出，同分取声明顺序第一个。生成路径只生成参数个数唯一的成员组，其余交给反射。
 8. 类型解析：先查已注册的 `LuaTypeBinding`，再按 `EnableReflectionFallback` 走反射，最后抛 Lua 错误；类表统一安装带 `fqn` 的分派入口，绑定未命中的键继续走反射。
 9. 参数装配：`out` 填默认值且不消耗实参，`ref` 与普通参数各消耗一个，`params` 把剩余实参转换后写入数组；调用后先压返回值（非 `void`），再按参数顺序压 `ref`/`out`，`in` 不回写。
 10. 操作符：实例 metatable 上挂 `__add`/`__sub`/`__mul`/`__div`/`__mod`/`__unm`/`__eq`/`__lt`/`__le`，按名称查 `op_*` 静态方法并调用；`__unm` 按 Lua 约定收到两个相同操作数，只取第一个匹配单参数方法；`__eq` 无运算符时退回引用比较。
 11. 索引器：键不是字符串时走 `this[...]`，读写各一个分支；字符串键仍按成员名解析。
 12. 事件：`__index` 命中 `EventInfo` 时返回闭包；`('+', fn)` 用 `LuaEventDelegateFactory` 把 Lua 函数包成事件委托并登记，`('-', fn)` 按 `lua_topointer` 找到同一函数对应的委托并移除，随后释放函数句柄。订阅关系存放在 `ConditionalWeakTable`，对象被回收时随之释放。
 13. 泛型方法：`lua_loom_generic(type, methodName, T1, ...)` 解析泛型定义，按类型参数个数匹配，`MakeGenericMethod` 闭合后返回调用器；静态方法参数从索引 1 开始，实例方法索引 1 是对象、参数从 2 开始。
+14. 扩展方法：实例成员未命中时，在已加载程序集中查找 public static 类上的 `ExtensionAttribute` 方法，要求首参类型可由实例类型赋值；结果按 `(Type, Name)` 缓存，命中后复用静态方法调用闭包。
 
 **复杂度**：`Cast` O(成员数)（缓存后不再反射查找）；delegate 调用 O(1)；反射兜底按成员名查找，未做跨调用缓存。
 
@@ -201,7 +204,10 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 | 未生成接口实现 | 调方法 | `DispatchProxy` 生效，返回正确 |
 | 未生成的 delegate 类型 | `Get<Action<int>>` | 抛 `LuaConversionException`，提示配置 |
 | 同名重载 `Foo(int)` 与 `Foo(string, out int)` | Lua 传 `"abc"` | 选中可装配的 `Foo(string, out int)` |
-| 同形重载 `Foo(int)` 与 `Foo(long)` | Lua 传 `1` | 按声明顺序选中第一个（同形不评分） |
+| 重载 `Pick(string)` 与 `Pick(object)` | Lua 传 `'x'` | 选中 `Pick(string)` |
+| 重载 `Pick(int)` 与 `Pick(long)` | Lua 传 `1` | 选中 `Pick(long)` |
+| 单参数带默认值 | `Optional()` | 返回默认值 `7` |
+| 扩展方法 `Triple(this Player, int)` | `p:Triple(2)` | 返回 `p.Hp * 2` |
 | 只绑定 `Hp` 的 `Player` | 读 `Name`、调 `Join` | 回落反射成功 |
 | 空绑定 + `Emitter` | 订阅 `Changed` 并 `Raise` | 回调收到参数 |
 | `TryParse(string, out int)` | 传 `"42"` | 返回 `true, 42` |

@@ -106,7 +106,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 
 1. 读取配置，校验字段完整性；相对路径以配置文件所在目录为基准解析。
 2. `MetadataLoadContext` 加载目标程序集及其依赖，解析每个类型全名；缺失则记 `LL0001`。`csharpCallLua` 支持 `Name<Arg1, Arg2>`：先查目标程序集、核心程序集与已加载程序集，再递归解析泛型参数并 `MakeGenericType`；基本类型别名映射到 CLR 类型。
-3. 遍历类型成员：跳过非公共成员与生成器不支持的类型（`ref`/`out`、数组、泛型类型等）；被跳过的成员由 M004 的反射回落接管，不记错误。
+3. 遍历类型成员：跳过非公共成员、`obsolete` 成员、同参数个数的重载组、带默认值参数的方法，以及生成器不支持的类型（`ref`/`out`、数组、泛型类型等）；被跳过的成员由 M004 的反射回落接管，不记错误。
 4. 对 delegate/interface 生成 invoker 或实现类；闭合泛型 delegate 的 `TypeRef` 递归输出 `global::Namespace.Type<...>`，文件名用 `TypeRef` 做字符白名单替换，避免写入尖括号、逗号与程序集限定名。
 5. 用 `CSharpSyntaxTree.ParseText` 做语法校验；真正的编译校验放在测试里，用 `CSharpCompilation` 对产物做一次 Emit。
 6. 通过后按文件名 `Ordinal` 排序写文件，UTF-8 无 BOM，换行 `\n`。
@@ -129,7 +129,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | :-- | :-- |
 | public 构造函数（按参数个数分派） | 泛型类型、泛型方法、嵌套类型 |
 | 实例/静态字段与属性（可读可写） | 事件、操作符、索引器的生成（运行期仍走反射） |
-| 实例/静态方法（按参数个数选择重载） | `ref`/`out`/`params` 的生成（运行期回落反射） |
+| 实例/静态方法（无同参数个数重载） | 同参数个数重载、`ref`/`out`/`params`、默认值参数、扩展方法（运行期回落反射） |
 | 非泛型 delegate 与闭合泛型 delegate（如 `Action<int>`） | 开放泛型 delegate |
 | interface 的方法与属性（含闭合泛型接口） | 接口默认实现、显式接口实现 |
 | — | 数组参数（`T[]`）的生成 |
@@ -152,6 +152,8 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | `csharpCallLua` 含自定义 `Mapper<int, string>` | `generate` + 编译 | 目标程序集开放泛型闭合正确 |
 | 配置 ``System.Action`1`` 或 `System.Action<>` | `generate` | 诊断 `LL0003` |
 | 检查泛型产物文件名 | 文本检查 | 仅字母数字与下划线 |
+| 同一方法存在两个同参数个数重载 | `generate` | 整个方法组不生成，运行时走反射评分 |
+| 类型含 `[Obsolete]` 方法/字段 | `generate` | 产物不含该成员 |
 | 同一类型在 `luaCallCSharp` 出现两次 | `generate` | 诊断 `LL0004`，退出码 `2` |
 | 输出目录只读 | `generate` | 抛 `IOException`，已有文件不被破坏 |
 | 生成物被手改 | `check` | 退出码 `1` |

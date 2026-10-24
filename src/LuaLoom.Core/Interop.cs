@@ -39,6 +39,7 @@ internal static class Interop
 
     private static readonly ConcurrentDictionary<IntPtr, LuaEnv> Environments = new();
     private static readonly ConcurrentDictionary<string, Type?> TypeCache = new();
+    private static readonly ConcurrentDictionary<(Type Type, string Name), (bool Found, MethodInfo? Method)> ExtensionCache = new();
 
     private static readonly (string LuaName, string MethodName)[] Operators =
     [
@@ -340,6 +341,15 @@ internal static class Interop
             return 1;
         }
 
+        var extension = FindExtensionMethod(type, name);
+        if (extension is not null)
+        {
+            LuaApi.lua_pushstring(s, extension.DeclaringType!.FullName!);
+            LuaApi.lua_pushstring(s, name);
+            LuaApi.lua_pushcclosure(s, StaticMethodPointer, 2);
+            return 1;
+        }
+
         LuaApi.lua_pushnil(s);
         return 1;
     });
@@ -512,6 +522,64 @@ internal static class Interop
         type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .FirstOrDefault(static p => p.GetIndexParameters().Length == 1);
 
+    private static MethodInfo? FindExtensionMethod(Type type, string name)
+    {
+        var key = (type, name);
+        if (ExtensionCache.TryGetValue(key, out var cached))
+        {
+            return cached.Found ? cached.Method : null;
+        }
+
+        var method = SearchExtensionMethod(type, name);
+        ExtensionCache[key] = (method is not null, method);
+        return method;
+    }
+
+    private static MethodInfo? SearchExtensionMethod(Type type, string name)
+    {
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            Type[] types;
+            try
+            {
+                types = assembly.GetTypes();
+            }
+            catch (ReflectionTypeLoadException exception)
+            {
+                types = exception.Types.Where(static t => t is not null).Cast<Type>().ToArray();
+            }
+
+            foreach (var candidate in types
+                .Where(static t => t.IsAbstract && t.IsSealed)
+                .OrderBy(static t => t.FullName, StringComparer.Ordinal))
+            {
+                foreach (var method in candidate
+                    .GetMethods(BindingFlags.Public | BindingFlags.Static)
+                    .OrderBy(static m => m.Name, StringComparer.Ordinal)
+                    .ThenBy(static m => m.GetParameters().Length))
+                {
+                    if (method.Name != name
+                        || method.IsGenericMethodDefinition
+                        || !method.IsDefined(typeof(ExtensionAttribute), inherit: false))
+                    {
+                        continue;
+                    }
+
+                    var parameters = method.GetParameters();
+                    if (parameters.Length == 0
+                        || !parameters[0].ParameterType.IsAssignableFrom(type))
+                    {
+                        continue;
+                    }
+
+                    return method;
+                }
+            }
+        }
+
+        return null;
+    }
+
     private static int OnEvent(IntPtr state) => Guarded(state, static s =>
     {
         var environment = GetEnvironment(s);
@@ -618,7 +686,7 @@ internal static class Interop
         if (method.IsStatic)
         {
             var values = ReadArguments(environment, s, 1, LuaApi.lua_gettop(s));
-            if (!TryBindArguments(values, method.GetParameters(), out var arguments))
+            if (!TryBindArguments(values, method.GetParameters(), out var arguments, out _))
             {
                 throw new ArgumentException($"No matching arguments for generic method '{type.Name}.{methodName}'.");
             }
@@ -631,7 +699,7 @@ internal static class Interop
             var target = environment.Marshal.GetObjectFromUserdata(1)
                 ?? throw new InvalidOperationException("Lua value is not a C# object.");
             var values = ReadArguments(environment, s, 2, LuaApi.lua_gettop(s));
-            if (!TryBindArguments(values, method.GetParameters(), out var arguments))
+            if (!TryBindArguments(values, method.GetParameters(), out var arguments, out _))
             {
                 throw new ArgumentException($"No matching arguments for generic method '{type.Name}.{methodName}'.");
             }
@@ -770,18 +838,22 @@ internal static class Interop
         out ConstructorInfo constructor,
         out object?[] arguments)
     {
+        constructor = null!;
+        arguments = [];
+        var bestScore = int.MinValue;
+
         foreach (var candidate in type.GetConstructors())
         {
-            if (TryBindArguments(values, candidate.GetParameters(), out arguments))
+            if (TryBindArguments(values, candidate.GetParameters(), out var candidateArguments, out var score)
+                && score > bestScore)
             {
                 constructor = candidate;
-                return true;
+                arguments = candidateArguments;
+                bestScore = score;
             }
         }
 
-        constructor = null!;
-        arguments = [];
-        return false;
+        return bestScore != int.MinValue;
     }
 
     private static bool TrySelectMethod(
@@ -793,6 +865,10 @@ internal static class Interop
         out object?[] arguments)
     {
         var flags = BindingFlags.Public | (isStatic ? BindingFlags.Static : BindingFlags.Instance);
+        method = null!;
+        arguments = [];
+        var bestScore = int.MinValue;
+
         foreach (var candidate in type.GetMethods(flags))
         {
             if (candidate.Name != name || candidate.IsGenericMethodDefinition)
@@ -800,24 +876,26 @@ internal static class Interop
                 continue;
             }
 
-            if (TryBindArguments(values, candidate.GetParameters(), out arguments))
+            if (TryBindArguments(values, candidate.GetParameters(), out var candidateArguments, out var score)
+                && score > bestScore)
             {
                 method = candidate;
-                return true;
+                arguments = candidateArguments;
+                bestScore = score;
             }
         }
 
-        method = null!;
-        arguments = [];
-        return false;
+        return bestScore != int.MinValue;
     }
 
     private static bool TryBindArguments(
         object?[] values,
         ParameterInfo[] parameters,
-        out object?[] arguments)
+        out object?[] arguments,
+        out int score)
     {
         arguments = new object?[parameters.Length];
+        score = 0;
         var valueIndex = 0;
 
         for (var i = 0; i < parameters.Length; i++)
@@ -837,11 +915,13 @@ internal static class Interop
                 }
 
                 if (valueIndex >= values.Length
-                    || !TryConvert(values[valueIndex++], elementType, out arguments[i]))
+                    || !TryConvert(values[valueIndex], elementType, out arguments[i]))
                 {
                     return false;
                 }
 
+                score += ScoreValue(values[valueIndex], elementType);
+                valueIndex++;
                 continue;
             }
 
@@ -857,6 +937,7 @@ internal static class Interop
                         return false;
                     }
 
+                    score += ScoreValue(values[valueIndex + j], elementType);
                     try
                     {
                         array.SetValue(item, j);
@@ -872,15 +953,129 @@ internal static class Interop
                 continue;
             }
 
-            if (valueIndex >= values.Length
-                || !TryConvert(values[valueIndex++], parameterType, out arguments[i]))
+            if (valueIndex >= values.Length)
+            {
+                if (!parameter.HasDefaultValue)
+                {
+                    return false;
+                }
+
+                arguments[i] = parameter.DefaultValue;
+                continue;
+            }
+
+            if (!TryConvert(values[valueIndex], parameterType, out arguments[i]))
             {
                 return false;
             }
+
+            score += ScoreValue(values[valueIndex], parameterType);
+            valueIndex++;
         }
 
         return valueIndex == values.Length;
     }
+
+    private static int ScoreValue(object? value, Type target)
+    {
+        var underlying = Nullable.GetUnderlyingType(target) ?? target;
+
+        if (value is null)
+        {
+            if (underlying == typeof(object))
+            {
+                return 1;
+            }
+
+            return target.IsValueType && Nullable.GetUnderlyingType(target) is null ? 0 : 3;
+        }
+
+        var actual = value.GetType();
+        if (actual == target || actual == underlying)
+        {
+            return 5;
+        }
+
+        if (underlying == typeof(object))
+        {
+            return 1;
+        }
+
+        if (target.IsAssignableFrom(actual))
+        {
+            return 4;
+        }
+
+        if (underlying.IsEnum)
+        {
+            return value is string ? 2 : 3;
+        }
+
+        if (underlying == typeof(bool))
+        {
+            return 1;
+        }
+
+        if (underlying == typeof(string))
+        {
+            return 2;
+        }
+
+        if (IsNumeric(underlying) && IsNumeric(actual))
+        {
+            if (actual == typeof(long))
+            {
+                if (underlying == typeof(long) || underlying == typeof(ulong))
+                {
+                    return 5;
+                }
+
+                return IsIntegral(underlying) ? 4 : 2;
+            }
+
+            if (actual == typeof(double))
+            {
+                if (underlying == typeof(double))
+                {
+                    return 5;
+                }
+
+                if (underlying == typeof(float))
+                {
+                    return 4;
+                }
+
+                return IsIntegral(underlying) ? 1 : 3;
+            }
+
+            return 2;
+        }
+
+        return 1;
+    }
+
+    private static bool IsNumeric(Type type) =>
+        type == typeof(byte)
+        || type == typeof(sbyte)
+        || type == typeof(short)
+        || type == typeof(ushort)
+        || type == typeof(int)
+        || type == typeof(uint)
+        || type == typeof(long)
+        || type == typeof(ulong)
+        || type == typeof(float)
+        || type == typeof(double)
+        || type == typeof(decimal);
+
+    private static bool IsIntegral(Type type) =>
+        type == typeof(byte)
+        || type == typeof(sbyte)
+        || type == typeof(short)
+        || type == typeof(ushort)
+        || type == typeof(int)
+        || type == typeof(uint)
+        || type == typeof(long)
+        || type == typeof(ulong);
 
     private static bool IsParamArray(ParameterInfo parameter) =>
         parameter.ParameterType.IsArray

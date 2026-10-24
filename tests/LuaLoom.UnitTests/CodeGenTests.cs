@@ -15,7 +15,7 @@ public sealed class CodeGenTests
         Assembly = assemblyPath,
         Output = "generated",
         Namespace = "LuaLoom.Generated",
-        LuaCallCSharp = ["LuaLoom.UnitTests.Sample.Player"],
+        LuaCallCSharp = ["LuaLoom.UnitTests.Sample.Player", "LuaLoom.UnitTests.Sample.Overloads"],
         CSharpCallLua =
         [
             "LuaLoom.UnitTests.Sample.IntOp",
@@ -34,6 +34,7 @@ public sealed class CodeGenTests
         Assert.Empty(result.Diagnostics);
         var names = result.Files.Select(static f => f.FileName).OrderBy(static n => n, StringComparer.Ordinal).ToArray();
         Assert.Contains("LuaLoom_UnitTests_Sample_PlayerBinder.g.cs", names);
+        Assert.Contains("LuaLoom_UnitTests_Sample_OverloadsBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_IntOpInvoker.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_ICalculatorImpl.g.cs", names);
         Assert.Contains("System_Action_int_Invoker.g.cs", names);
@@ -52,6 +53,21 @@ public sealed class CodeGenTests
         Assert.Contains("new global::System.Action<int>", generic.Content, StringComparison.Ordinal);
         Assert.Contains("typeof(global::System.Action<int>)", bindings.Content, StringComparison.Ordinal);
         Assert.Matches("^[A-Za-z0-9_]+\\.g\\.cs$", generic.FileName);
+    }
+
+    [Fact]
+    public void Generate_SkipsAmbiguousObsoleteAndOptionalMethods()
+    {
+        var config = CreateConfig(typeof(Player).Assembly.Location);
+        config.LuaCallCSharp = ["LuaLoom.UnitTests.Sample.Overloads"];
+
+        var result = CodeGenerator.Generate(config, AppContext.BaseDirectory);
+
+        Assert.Empty(result.Diagnostics);
+        var binder = result.Files.Single(static f => f.FileName == "LuaLoom_UnitTests_Sample_OverloadsBinder.g.cs");
+        Assert.DoesNotContain("Pick", binder.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("Legacy", binder.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("Optional", binder.Content, StringComparison.Ordinal);
     }
 
     [Fact]

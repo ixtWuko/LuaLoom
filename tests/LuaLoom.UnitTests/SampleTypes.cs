@@ -148,6 +148,27 @@ public static class Parsing
     }
 }
 
+public static class PlayerExtensions
+{
+    public static int Triple(this Player player, int value) => player.Hp * value;
+}
+
+public static class Overloads
+{
+    public static string Pick(string value) => "string";
+
+    public static string Pick(object value) => "object";
+
+    public static string Pick(int value) => "int";
+
+    public static string Pick(long value) => "long";
+
+    public static int Optional(int value = 7) => value;
+
+    [Obsolete("Use Optional.")]
+    public static int Legacy() => 1;
+}
+
 public sealed class NumberList
 {
     public NumberList(params int[] values)

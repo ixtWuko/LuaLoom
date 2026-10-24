@@ -63,7 +63,7 @@ var config = table.Cast<GameConfig>();
 
 ```csharp
 using var fn = env.Global.Get<LuaFunction>("on_update");
-fn.Call(0.016);                       // 慢路径，返回 object[]
+fn.Call(0.016);                       // 慢路径，返回 object[]；错误带 traceback
 ```
 
 高频调用应把函数映射为 delegate（需要在 `csharpCallLua` 中配置），泛型 delegate 也一样：
@@ -85,6 +85,7 @@ onScore(10);
 local p = CS.MyGame.Player(5)   -- 构造
 p.Hp = 10                       -- 字段/属性
 print(p:Add(1, 2))              -- 实例方法
+print(p:Triple(2))              -- 扩展方法
 print(CS.MyGame.Player.Double(4)) -- 静态方法
 ```
 
@@ -101,7 +102,9 @@ local next = CS.MyGame.Parsing.Bump(1)               -- ref 写回
 local text = CS.MyGame.Parsing.Join('-', 1, 2, 3)    -- params 展开
 ```
 
-生成绑定只覆盖热点成员；未生成的成员（包括继承成员、事件、含 `ref`/`out`/`params` 的方法）会自动回落到反射。绑定自己返回 `nil` 的成员不会被误判为「未处理」。
+生成绑定只覆盖热点成员；未生成的成员（包括继承成员、事件、扩展方法、含 `ref`/`out`/`params` 的方法）会自动回落到反射。绑定自己返回 `nil` 的成员不会被误判为「未处理」。
+
+同名重载由反射按参数类型评分：精确类型优先，其次可转换类型；生成器遇到同参数个数的重载组会整体交给反射。
 
 ## 5. delegate 与 interface
 
