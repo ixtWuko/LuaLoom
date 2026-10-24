@@ -17,11 +17,20 @@ public sealed class GeneratorConfig
     public string[] LuaCallCSharp { get; set; } = [];
 
     public string[] CSharpCallLua { get; set; } = [];
+
+    /// <summary>不生成绑定、改走反射的成员或类型（`Type` 或 `Type.Member`）。</summary>
+    public string[] BlackList { get; set; } = [];
+
+    /// <summary>与 <see cref="BlackList"/> 类似，但用于显式声明不生成的类型或成员。</summary>
+    public string[] DoNotGen { get; set; } = [];
 }
 
 public sealed record GeneratedFile(string FileName, string Content, bool IsCode = true);
 
 public sealed record Diagnostic(string Code, string Message);
+
+/// <summary>生成覆盖记录：成员是否由生成代码接管，未接管时给出原因。</summary>
+public sealed record CoverageEntry(string TypeName, string Member, string Status, string Reason);
 
 public sealed class CodeGenException : Exception
 {
@@ -33,15 +42,21 @@ public sealed class CodeGenException : Exception
 
 public sealed class GenerationResult
 {
-    public GenerationResult(IReadOnlyList<GeneratedFile> files, IReadOnlyList<Diagnostic> diagnostics)
+    public GenerationResult(
+        IReadOnlyList<GeneratedFile> files,
+        IReadOnlyList<Diagnostic> diagnostics,
+        IReadOnlyList<CoverageEntry>? coverage = null)
     {
         Files = files;
         Diagnostics = diagnostics;
+        Coverage = coverage ?? [];
     }
 
     public IReadOnlyList<GeneratedFile> Files { get; }
 
     public IReadOnlyList<Diagnostic> Diagnostics { get; }
+
+    public IReadOnlyList<CoverageEntry> Coverage { get; }
 
     public bool HasErrors => Diagnostics.Count > 0;
 }
@@ -130,6 +145,11 @@ public static class CodeGenerator
                 continue;
             }
 
+            if (TryGetDenyReason(config, type, null, out _))
+            {
+                continue;
+            }
+
             referencedTypes.Add(type);
             var binder = Sanitize(type.FullName!) + "Binder";
             files.Add(new GeneratedFile(binder + ".g.cs", EmitTypeBinder(type, binder, config)));
@@ -171,6 +191,11 @@ public static class CodeGenerator
                 continue;
             }
 
+            if (TryGetDenyReason(config, type, null, out _))
+            {
+                continue;
+            }
+
             referencedTypes.Add(type);
             if (IsDelegateType(type))
             {
@@ -181,7 +206,7 @@ public static class CodeGenerator
             }
             else if (type.IsInterface)
             {
-                if (!CanGenerateInterface(type))
+                if (!CanGenerateInterface(type) || HasDeniedMember(config, type))
                 {
                     continue;
                 }
@@ -216,7 +241,7 @@ public static class CodeGenerator
                 f.IsCode))
             .ToList();
         files.Sort(static (a, b) => string.CompareOrdinal(a.FileName, b.FileName));
-        return new GenerationResult(files, diagnostics);
+        return new GenerationResult(files, diagnostics, BuildCoverage(assembly, context, config));
     }
 
     private static Type? ResolveConfiguredType(
@@ -380,6 +405,386 @@ public static class CodeGenerator
         return arguments;
     }
 
+    private static bool IsMemberDenied(GeneratorConfig config, Type type, string member) =>
+        TryGetDenyReason(config, type, member, out _);
+
+    private static bool HasDeniedMember(GeneratorConfig config, Type type)
+    {
+        foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (!method.IsSpecialName && IsMemberDenied(config, type, method.Name))
+            {
+                return true;
+            }
+        }
+
+        foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (IsMemberDenied(config, type, property.Name))
+            {
+                return true;
+            }
+        }
+
+        foreach (var eventInfo in type.GetEvents(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (IsMemberDenied(config, type, eventInfo.Name))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetDenyReason(
+        GeneratorConfig config,
+        Type type,
+        string? member,
+        out string reason)
+    {
+        var typeName = type.FullName ?? type.Name;
+        var alternateName = typeName.Replace('+', '.');
+
+        if (Matches(config.BlackList, typeName) || Matches(config.BlackList, alternateName))
+        {
+            reason = "blacklisted type";
+            return true;
+        }
+
+        if (Matches(config.DoNotGen, typeName) || Matches(config.DoNotGen, alternateName))
+        {
+            reason = "do-not-gen type";
+            return true;
+        }
+
+        if (member is not null)
+        {
+            var fullName = typeName + "." + member;
+            var alternateFullName = alternateName + "." + member;
+            if (Matches(config.BlackList, fullName) || Matches(config.BlackList, alternateFullName))
+            {
+                reason = "blacklisted member";
+                return true;
+            }
+
+            if (Matches(config.DoNotGen, fullName) || Matches(config.DoNotGen, alternateFullName))
+            {
+                reason = "do-not-gen member";
+                return true;
+            }
+        }
+
+        reason = string.Empty;
+        return false;
+    }
+
+    private static bool Matches(string[]? entries, string name) =>
+        entries is not null && entries.Contains(name, StringComparer.Ordinal);
+
+    private static List<CoverageEntry> BuildCoverage(
+        Assembly assembly,
+        MetadataLoadContext context,
+        GeneratorConfig config)
+    {
+        var entries = new List<CoverageEntry>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var name in config.LuaCallCSharp)
+        {
+            var type = assembly.GetType(name);
+            if (type is null || type.IsGenericType || type.IsNested)
+            {
+                continue;
+            }
+
+            AddTypeCoverage(type, config, entries, seen);
+        }
+
+        foreach (var name in config.CSharpCallLua)
+        {
+            var type = ResolveConfiguredType(context, assembly, name);
+            if (type is null)
+            {
+                continue;
+            }
+
+            if (TryGetDenyReason(config, type, null, out var deniedReason))
+            {
+                AddCoverage(entries, seen, type, "<type>", "skipped", deniedReason);
+                continue;
+            }
+
+            if (IsDelegateType(type))
+            {
+                AddCoverage(entries, seen, type, "Invoker", "generated", string.Empty);
+                continue;
+            }
+
+            if (!type.IsInterface)
+            {
+                continue;
+            }
+
+            if (!CanGenerateInterface(type) || HasDeniedMember(config, type))
+            {
+                AddCoverage(
+                    entries,
+                    seen,
+                    type,
+                    "<interface>",
+                    "skipped",
+                    HasDeniedMember(config, type)
+                        ? "interface has a blacklisted/do-not-gen member"
+                        : "interface shape not generated");
+                continue;
+            }
+
+            foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .Where(static m => !m.IsSpecialName))
+            {
+                AddCoverage(
+                    entries,
+                    seen,
+                    type,
+                    MethodName(method),
+                    "generated",
+                    string.Empty);
+            }
+
+            foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (property.GetIndexParameters().Length == 0)
+                {
+                    AddCoverage(entries, seen, type, property.Name, "generated", string.Empty);
+                }
+            }
+
+            foreach (var eventInfo in type.GetEvents(BindingFlags.Public | BindingFlags.Instance))
+            {
+                AddCoverage(entries, seen, type, eventInfo.Name, "generated", string.Empty);
+            }
+        }
+
+        return entries
+            .OrderBy(static e => e.TypeName, StringComparer.Ordinal)
+            .ThenBy(static e => e.Member, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static void AddTypeCoverage(
+        Type type,
+        GeneratorConfig config,
+        List<CoverageEntry> entries,
+        HashSet<string> seen)
+    {
+        if (TryGetDenyReason(config, type, null, out var typeDeniedReason))
+        {
+            AddCoverage(entries, seen, type, "<type>", "skipped", typeDeniedReason);
+            return;
+        }
+
+        var includeBase = type.BaseType is not null
+            && config.LuaCallCSharp.Any(name =>
+                string.Equals(name, type.BaseType.FullName, StringComparison.Ordinal));
+
+        var supportedConstructors = type.GetConstructors()
+            .GroupBy(static c => c.GetParameters().Length)
+            .Where(static g => g.Count() == 1)
+            .Select(static g => g.Single())
+            .Where(static c => !IsObsolete(c)
+                && c.GetParameters().All(static p =>
+                    IsSupportedParameter(p.ParameterType) && !p.HasDefaultValue))
+            .Select(ConstructorKey)
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var constructor in type.GetConstructors())
+        {
+            var key = ConstructorKey(constructor);
+            var denied = TryGetDenyReason(config, type, ".ctor", out var denyReason);
+            var generated = supportedConstructors.Contains(key);
+            AddCoverage(
+                entries,
+                seen,
+                type,
+                $"ctor({string.Join(", ", constructor.GetParameters().Select(static p => p.ParameterType.Name))})",
+                denied ? "skipped" : generated ? "generated" : "reflection",
+                denied ? denyReason : generated ? string.Empty : "constructor shape not generated");
+        }
+
+        var instanceMethods = SupportedMethods(type, BindingFlags.Instance, includeBase: includeBase)
+            .Select(MethodKey)
+            .ToHashSet(StringComparer.Ordinal);
+        var staticMethods = SupportedMethods(type, BindingFlags.Static, includeBase: includeBase)
+            .Select(MethodKey)
+            .ToHashSet(StringComparer.Ordinal);
+        var allMethods = type.GetMethods(
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static
+                | (includeBase ? BindingFlags.FlattenHierarchy : BindingFlags.DeclaredOnly))
+            .Where(static m => !m.IsSpecialName);
+
+        foreach (var method in allMethods)
+        {
+            var denied = TryGetDenyReason(config, type, method.Name, out var denyReason);
+            var generated = (method.IsStatic ? staticMethods : instanceMethods).Contains(MethodKey(method));
+            AddCoverage(
+                entries,
+                seen,
+                type,
+                MethodName(method),
+                denied ? "skipped" : generated ? "generated" : "reflection",
+                denied ? denyReason : generated ? string.Empty : MethodSkipReason(method));
+        }
+
+        var instanceProperties = SupportedProperties(type, BindingFlags.Instance, includeBase: includeBase)
+            .Select(static p => p.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var staticProperties = SupportedProperties(type, BindingFlags.Static, includeBase: includeBase)
+            .Select(static p => p.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var property in type.GetProperties(
+            BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static
+            | (includeBase ? BindingFlags.FlattenHierarchy : BindingFlags.DeclaredOnly)))
+        {
+            if (property.GetIndexParameters().Length > 0)
+            {
+                continue;
+            }
+
+            var denied = TryGetDenyReason(config, type, property.Name, out var denyReason);
+            var generated = (property.GetMethod?.IsStatic == true
+                ? staticProperties
+                : instanceProperties).Contains(property.Name);
+            AddCoverage(
+                entries,
+                seen,
+                type,
+                property.Name,
+                denied ? "skipped" : generated ? "generated" : "reflection",
+                denied ? denyReason : generated ? string.Empty : PropertySkipReason(property));
+        }
+
+        var instanceFields = SupportedFields(type, BindingFlags.Instance, includeBase: includeBase)
+            .Select(static f => f.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var staticFields = SupportedFields(type, BindingFlags.Static, includeBase: includeBase)
+            .Select(static f => f.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var field in type.GetFields(
+            BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static
+            | (includeBase ? BindingFlags.FlattenHierarchy : BindingFlags.DeclaredOnly)))
+        {
+            var denied = TryGetDenyReason(config, type, field.Name, out var denyReason);
+            var generated = (field.IsStatic ? staticFields : instanceFields).Contains(field.Name);
+            AddCoverage(
+                entries,
+                seen,
+                type,
+                field.Name,
+                denied ? "skipped" : generated ? "generated" : "reflection",
+                denied ? denyReason : generated ? string.Empty : (IsObsolete(field) ? "obsolete" : "unsupported field type"));
+        }
+
+        var events = SupportedEvents(type, includeBase)
+            .Select(static e => e.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var eventInfo in type.GetEvents(
+            BindingFlags.Public | BindingFlags.Instance
+            | (includeBase ? BindingFlags.FlattenHierarchy : BindingFlags.DeclaredOnly)))
+        {
+            var denied = TryGetDenyReason(config, type, eventInfo.Name, out var denyReason);
+            var generated = events.Contains(eventInfo.Name);
+            AddCoverage(
+                entries,
+                seen,
+                type,
+                eventInfo.Name,
+                denied ? "skipped" : generated ? "generated" : "reflection",
+                denied ? denyReason : generated ? string.Empty : (IsObsolete(eventInfo) ? "obsolete" : "unsupported event type"));
+        }
+
+        var indexer = FindIndexer(type);
+        var indexers = type.GetProperties(
+            BindingFlags.Public | BindingFlags.Instance | (includeBase ? BindingFlags.FlattenHierarchy : BindingFlags.DeclaredOnly))
+            .Where(static p => p.GetIndexParameters().Length > 0)
+            .ToList();
+        if (indexers.Count > 0)
+        {
+            var denied = TryGetDenyReason(config, type, "this[]", out var denyReason);
+            AddCoverage(
+                entries,
+                seen,
+                type,
+                "this[]",
+                denied ? "skipped" : indexer is not null ? "generated" : "reflection",
+                denied ? denyReason : indexer is not null ? string.Empty : "indexer shape not generated");
+        }
+    }
+
+    private static void AddCoverage(
+        List<CoverageEntry> entries,
+        HashSet<string> seen,
+        Type type,
+        string member,
+        string status,
+        string reason)
+    {
+        var typeName = type.FullName ?? type.Name;
+        if (seen.Add(typeName + "::" + member))
+        {
+            entries.Add(new CoverageEntry(typeName, member, status, reason));
+        }
+    }
+
+    private static string MethodName(MethodInfo method) =>
+        $"{method.Name}({string.Join(", ", method.GetParameters().Select(static p => p.ParameterType.Name))})";
+
+    private static string MethodKey(MethodInfo method) =>
+        $"{(method.IsStatic ? "S" : "I")}:{MethodName(method)}";
+
+    private static string ConstructorKey(ConstructorInfo constructor) =>
+        $"ctor({string.Join(", ", constructor.GetParameters().Select(static p => p.ParameterType.FullName ?? p.ParameterType.Name))})";
+
+    private static string MethodSkipReason(MethodInfo method)
+    {
+        if (method.IsGenericMethodDefinition)
+        {
+            return "generic method";
+        }
+
+        if (IsObsolete(method))
+        {
+            return "obsolete";
+        }
+
+        foreach (var parameter in method.GetParameters())
+        {
+            var type = parameter.ParameterType.IsByRef
+                ? parameter.ParameterType.GetElementType()!
+                : parameter.ParameterType;
+            if (!IsSupportedParameter(type))
+            {
+                return $"unsupported parameter type {type.Name}";
+            }
+        }
+
+        return "overload group contains unsupported member";
+    }
+
+    private static string PropertySkipReason(PropertyInfo property)
+    {
+        if (IsObsolete(property)
+            || IsObsolete(property.GetMethod)
+            || (property.SetMethod is not null && IsObsolete(property.SetMethod)))
+        {
+            return "obsolete";
+        }
+
+        return IsSupportedParameter(property.PropertyType)
+            ? "property shape not generated"
+            : $"unsupported property type {property.PropertyType.Name}";
+    }
+
     private static MetadataLoadContext CreateContext(string assemblyPath)
     {
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -406,6 +811,7 @@ public static class CodeGenerator
             .Select(static g => g.Single())
             .Where(static c => !IsObsolete(c)
                 && c.GetParameters().All(static p => IsSupportedParameter(p.ParameterType) && !p.HasDefaultValue))
+            .Where(c => !IsMemberDenied(config, type, ".ctor"))
             .OrderBy(static c => c.GetParameters().Length)
             .ToList();
 
@@ -413,16 +819,37 @@ public static class CodeGenerator
             && config.LuaCallCSharp.Any(name =>
                 string.Equals(name, type.BaseType.FullName, StringComparison.Ordinal));
 
-        var instanceMethods = SupportedMethods(type, BindingFlags.Instance, includeBase: includeBase);
-        var staticMethods = SupportedMethods(type, BindingFlags.Static, includeBase: includeBase);
-        var instanceProperties = SupportedProperties(type, BindingFlags.Instance, includeBase: includeBase);
-        var staticProperties = SupportedProperties(type, BindingFlags.Static, includeBase: includeBase);
-        var instanceFields = SupportedFields(type, BindingFlags.Instance, includeBase: includeBase);
-        var staticFields = SupportedFields(type, BindingFlags.Static, includeBase: includeBase);
-        var events = SupportedEvents(type, includeBase);
+        var instanceMethods = SupportedMethods(type, BindingFlags.Instance, includeBase: includeBase)
+            .Where(m => !IsMemberDenied(config, type, m.Name))
+            .ToList();
+        var staticMethods = SupportedMethods(type, BindingFlags.Static, includeBase: includeBase)
+            .Where(m => !IsMemberDenied(config, type, m.Name))
+            .ToList();
+        var instanceProperties = SupportedProperties(type, BindingFlags.Instance, includeBase: includeBase)
+            .Where(p => !IsMemberDenied(config, type, p.Name))
+            .ToList();
+        var staticProperties = SupportedProperties(type, BindingFlags.Static, includeBase: includeBase)
+            .Where(p => !IsMemberDenied(config, type, p.Name))
+            .ToList();
+        var instanceFields = SupportedFields(type, BindingFlags.Instance, includeBase: includeBase)
+            .Where(f => !IsMemberDenied(config, type, f.Name))
+            .ToList();
+        var staticFields = SupportedFields(type, BindingFlags.Static, includeBase: includeBase)
+            .Where(f => !IsMemberDenied(config, type, f.Name))
+            .ToList();
+        var events = SupportedEvents(type, includeBase)
+            .Where(e => !IsMemberDenied(config, type, e.Name))
+            .ToList();
         var extensionMethods = staticMethods.Where(IsExtensionMethod).ToList();
         var indexer = FindIndexer(type);
-        var operators = FindOperators(type);
+        if (indexer is not null && IsMemberDenied(config, type, "this[]"))
+        {
+            indexer = null;
+        }
+
+        var operators = FindOperators(type)
+            .Where(op => !IsMemberDenied(config, type, op.Method.Name))
+            .ToList();
 
         var hasInstance = instanceMethods.Count > 0
             || instanceProperties.Count > 0

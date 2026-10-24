@@ -50,7 +50,9 @@
   "output": "samples/LuaLoom.Sample/Generated",
   "namespace": "LuaLoom.Sample.Generated",
   "luaCallCSharp": ["LuaLoom.Sample.Player", "LuaLoom.Sample.Config", "LuaLoom.Sample.PlayerExtensions"],
-  "csharpCallLua": ["LuaLoom.Sample.ILuaUpdate", "System.Action<int>", "System.Func<int, string>"]
+  "csharpCallLua": ["LuaLoom.Sample.ILuaUpdate", "System.Action<int>", "System.Func<int, string>"],
+  "blackList": ["LuaLoom.Sample.Player.Secret"],
+  "doNotGen": ["LuaLoom.Sample.Legacy"]
 }
 ```
 
@@ -59,7 +61,10 @@
 ```powershell
 lua-loom-gen generate --config lua-loom.json
 lua-loom-gen check    --config lua-loom.json
+lua-loom-gen generate --config lua-loom.json --coverage
 ```
+
+`--coverage` 在标准输出打印生成数、反射数、跳过数，以及每个未生成成员的原因。
 
 | 场景 | 退出码 | 输出 |
 | :-- | :-- | :-- |
@@ -91,6 +96,8 @@ lua-loom-gen check    --config lua-loom.json
 | `Namespace` | `string` | 生成代码命名空间，默认 `LuaLoom.Generated` |
 | `LuaCallCSharp` | `string[]` | 需要生成包装的类型全名 |
 | `CSharpCallLua` | `string[]` | 需要生成调用器的 delegate 与 interface |
+| `BlackList` | `string[]` | 不生成、留给反射的 `Type` 或 `Type.Member` |
+| `DoNotGen` | `string[]` | 显式声明不生成的 `Type` 或 `Type.Member` |
 
 JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct 的零 GC 传递由运行时按类型自动判定，不需要配置。
 
@@ -114,6 +121,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 6. 通过后按文件名 `Ordinal` 排序写文件，UTF-8 无 BOM，换行 `\n`。
 7. 按配置类型生成 `link.xml`，避免 Unity IL2CPP 裁剪反射/生成所需元数据；XML 文件跳过 C# 语法校验。
 8. `check` 模式重新生成到内存，与磁盘文件逐字节比较，差异输出文件清单。
+9. 同时产出 `Coverage` 列表：每个配置成员标记 `generated` / `reflection` / `skipped`；`BlackList`/`DoNotGen` 命中的类型或成员记为 `skipped`，未生成原因随记录返回。命中接口任一成员时跳过整个接口实现，避免产出缺成员的实现类；命中 delegate 类型时跳过 invoker。
 
 **复杂度**：O(类型数 × 成员数)；生成 100 个类型的耗时上限在模块验收中定为 5 秒以内（本机）。
 
@@ -143,6 +151,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 扩展方法类（列入 `luaCallCSharp`，生成注册与分派表） | 未配置的扩展方法不扫描、不可见 |
 | 一维数组参数/返回值（基本类型、字符串、枚举、`object`） | 多维数组、类元素数组 |
 | `decimal` 参数/返回值（struct userdata） | 反射路径的 decimal 自动识别 |
+| `BlackList`/`DoNotGen` 类型或成员、`--coverage` 报告 | 按签名精确排除重载（当前按成员名排除整组） |
 
 同一参数个数的多个重载取声明顺序第一个；多类型重载的精确解析留给运行时反射路径。生成器跳过的成员不会丢失，由 [M004](M004-interop-bridge.md) 的回落路径接管。
 
@@ -176,6 +185,9 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 接口含事件与无约束泛型方法 | `generate` + 编译 | 产物含事件访问器与泛型方法，Emit 成功 |
 | delegate 含 `params`/`ref`/`out`/数组 | `generate` + 编译 | 产物包含对应 lambda 与转换，Emit 成功 |
 | 生成绑定 + `StrictReflection = true` | 运行时执行生成成员 | 正常返回，无反射兜底 |
+| `blackList` 含 `Player.Add` | `generate` | `Add` 不在产物中，覆盖记录为 `blacklisted member` |
+| `doNotGen` 含整个类型 | `generate` | 不产出该类型 binder，覆盖记录为 `do-not-gen type` |
+| `generate --coverage` | CLI | 输出 generated/reflection/skipped 统计与未生成原因 |
 | 派生类 + 已配置基类 | `generate` | 派生类绑定包含基类字段/属性/方法 |
 | 派生类单独配置 | `generate` | 不生成未配置基类成员 |
 | 类型含 `this[int]` | `generate` | 绑定含 `InstanceIndexer`/`InstanceIndexerSet` |

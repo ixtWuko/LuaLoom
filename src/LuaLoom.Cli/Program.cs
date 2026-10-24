@@ -20,11 +20,16 @@ static int Run(string[] args)
     }
 
     string? configPath = null;
+    var showCoverage = false;
     for (var i = 1; i < args.Length; i++)
     {
         if (args[i] == "--config" && i + 1 < args.Length)
         {
             configPath = args[++i];
+        }
+        else if (args[i] == "--coverage")
+        {
+            showCoverage = true;
         }
         else
         {
@@ -45,6 +50,11 @@ static int Run(string[] args)
         var config = CodeGenerator.LoadConfig(configPath);
         var baseDirectory = Path.GetDirectoryName(Path.GetFullPath(configPath))!;
         var result = CodeGenerator.Generate(config, baseDirectory);
+
+        if (showCoverage)
+        {
+            PrintCoverage(result.Coverage);
+        }
 
         if (result.HasErrors)
         {
@@ -111,8 +121,21 @@ static int Run(string[] args)
     }
 }
 
+static void PrintCoverage(IReadOnlyList<CoverageEntry> coverage)
+{
+    var generated = coverage.Count(static e => e.Status == "generated");
+    var reflection = coverage.Count(static e => e.Status == "reflection");
+    var skipped = coverage.Count - generated - reflection;
+    Console.WriteLine($"Coverage: generated {generated}, reflection {reflection}, skipped {skipped}");
+
+    foreach (var entry in coverage.Where(static e => e.Status != "generated"))
+    {
+        Console.WriteLine($"  [{entry.Status}] {entry.TypeName}.{entry.Member}: {entry.Reason}");
+    }
+}
+
 static void PrintUsage()
 {
-    Console.Error.WriteLine("lua-loom-gen generate --config <path>");
-    Console.Error.WriteLine("lua-loom-gen check    --config <path>");
+    Console.Error.WriteLine("lua-loom-gen generate --config <path> [--coverage]");
+    Console.Error.WriteLine("lua-loom-gen check    --config <path> [--coverage]");
 }

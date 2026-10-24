@@ -57,6 +57,23 @@ public sealed class Calculator : ICalculator
     public int Value { get; set; }
 }
 
+public sealed class UnsupportedSurface
+{
+    public int Value { get; set; }
+
+    public void Generic<T>(T value)
+    {
+    }
+
+    public void Unsupported(List<int> values)
+    {
+    }
+
+    public void Multi(int[,] values)
+    {
+    }
+}
+
 public sealed class ComplexOverloads
 {
     public string Combo(int value) => "int";

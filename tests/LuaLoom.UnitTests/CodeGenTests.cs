@@ -33,6 +33,7 @@ public sealed class CodeGenTests
             "LuaLoom.UnitTests.Sample.ComplexOverloads",
             "LuaLoom.UnitTests.Sample.DelegateFactory",
             "LuaLoom.UnitTests.Sample.InteropHost",
+            "LuaLoom.UnitTests.Sample.UnsupportedSurface",
         ],
         CSharpCallLua =
         [
@@ -69,6 +70,20 @@ public sealed class CodeGenTests
         Assert.Contains("LuaLoom_UnitTests_Sample_EmitterBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_DecimalMethodsBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_ComplexOverloadsBinder.g.cs", names);
+        Assert.Contains("LuaLoom_UnitTests_Sample_UnsupportedSurfaceBinder.g.cs", names);
+        Assert.Contains(
+            result.Coverage,
+            static entry => entry.Member.Contains("Generic", StringComparison.Ordinal)
+                && entry.Status == "reflection"
+                && entry.Reason == "generic method");
+        Assert.Contains(
+            result.Coverage,
+            static entry => entry.Member.Contains("Unsupported", StringComparison.Ordinal)
+                && entry.Status == "reflection"
+                && entry.Reason.Contains("unsupported parameter", StringComparison.Ordinal));
+        Assert.Contains(
+            result.Coverage,
+            static entry => entry.Member == "Value" && entry.Status == "generated");
         Assert.Contains("LuaLoom_UnitTests_Sample_IntOpInvoker.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_ParseOpInvoker.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_ParamsOpInvoker.g.cs", names);
@@ -151,6 +166,55 @@ public sealed class CodeGenTests
         Assert.Contains("IsInteger", binder.Content, StringComparison.Ordinal);
         Assert.Contains("Optional", binder.Content, StringComparison.Ordinal);
         Assert.DoesNotContain("Legacy", binder.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Generate_BlackListAndDoNotGenSkipMembers()
+    {
+        var config = CreateConfig(typeof(Player).Assembly.Location);
+        config.LuaCallCSharp = ["LuaLoom.UnitTests.Sample.Player"];
+        config.CSharpCallLua = [];
+        config.BlackList = ["LuaLoom.UnitTests.Sample.Player.Add"];
+        config.DoNotGen = ["LuaLoom.UnitTests.Sample.Player.Name"];
+
+        var result = CodeGenerator.Generate(config, AppContext.BaseDirectory);
+
+        Assert.Empty(result.Diagnostics);
+        var binder = result.Files.Single(static f => f.FileName == "LuaLoom_UnitTests_Sample_PlayerBinder.g.cs");
+        Assert.DoesNotContain("case \"Add\":", binder.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("case \"Name\":", binder.Content, StringComparison.Ordinal);
+        Assert.Contains("case \"Hp\":", binder.Content, StringComparison.Ordinal);
+        Assert.Contains(
+            result.Coverage,
+            static entry => entry.Member.StartsWith("Add(", StringComparison.Ordinal)
+                && entry.Status == "skipped"
+                && entry.Reason == "blacklisted member");
+        Assert.Contains(
+            result.Coverage,
+            static entry => entry.Member == "Name"
+                && entry.Status == "skipped"
+                && entry.Reason == "do-not-gen member");
+    }
+
+    [Fact]
+    public void Generate_BlackListedTypeSkipsBinder()
+    {
+        var config = CreateConfig(typeof(Player).Assembly.Location);
+        config.LuaCallCSharp = ["LuaLoom.UnitTests.Sample.ComplexOverloads"];
+        config.CSharpCallLua = [];
+        config.DoNotGen = ["LuaLoom.UnitTests.Sample.ComplexOverloads"];
+
+        var result = CodeGenerator.Generate(config, AppContext.BaseDirectory);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.DoesNotContain(
+            result.Files,
+            static f => f.FileName == "LuaLoom_UnitTests_Sample_ComplexOverloadsBinder.g.cs");
+        Assert.Contains(
+            result.Coverage,
+            static entry => entry.Member == "<type>"
+                && entry.Status == "skipped"
+                && entry.Reason == "do-not-gen type");
     }
 
     [Fact]
