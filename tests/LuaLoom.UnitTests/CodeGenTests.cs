@@ -25,6 +25,7 @@ public sealed class CodeGenTests
             "LuaLoom.UnitTests.Sample.Parsing",
             "LuaLoom.UnitTests.Sample.ArrayMethods",
             "LuaLoom.UnitTests.Sample.Money",
+            "LuaLoom.UnitTests.Sample.PointMath",
         ],
         CSharpCallLua =
         [
@@ -50,6 +51,7 @@ public sealed class CodeGenTests
         Assert.Contains("LuaLoom_UnitTests_Sample_ParsingBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_ArrayMethodsBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_MoneyBinder.g.cs", names);
+        Assert.Contains("LuaLoom_UnitTests_Sample_PointMathBinder.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_IntOpInvoker.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_ICalculatorImpl.g.cs", names);
         Assert.Contains("System_Action_int_Invoker.g.cs", names);

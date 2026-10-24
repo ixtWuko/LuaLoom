@@ -50,6 +50,7 @@
 | E18 | 实例成员未命中时可调用扩展方法，实例作为首参 | `p:Triple(2)` 返回 `p.Hp * 2` |
 | E19 | 一维数组参数/返回值可由生成绑定编解码，元素类型受支持 | `Sum(int[])` 与 `Double(int[])` |
 | E20 | xLua 兼容 API：`typeof`、`cast`、`uint64.*`、`xlua.get_generic_method` | 对应脚本断言 |
+| E21 | Lua table 作为方法参数时自动转换为 class/struct/interface | `PointMath.Sum({ X = 1, Y = 2 })` |
 
 **非目标**
 
@@ -187,6 +188,7 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 
 - `Cast<T>` 只做值拷贝，文档与示例中明确标注不回写。
 - 缺失键保留默认值；成员类型不匹配抛 `LuaConversionException`，消息含类型全名与键名。
+- 方法参数为 class/struct/interface 且 Lua 侧给 table 时，按 `LuaTable.Cast<T>` 的规则转换；table 到 `object`/`LuaTable` 不做隐式转换。
 - 生成的 invoker 与 `DispatchProxy` 代理各自做参数转换，规则同源于 M002 的 `Read`/`Push`；两条路径的行为由同一组用例覆盖。
 - 绑定只提供部分 thunk 时（例如没有生成 `__call`），缺失的入口回落到反射实现，不会留下一张调不通的类表。
 - 绑定 thunk 的「未处理」约定：`Call` / `StaticIndex` / `InstanceIndex` 返回 0 且不压栈；`StaticNewIndex` / `InstanceNewIndex` 压入 `nil` 并返回 1。返回值本身是 `nil` 时必须返回 1，否则会被误判为未处理并触发回落。
@@ -221,6 +223,7 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 | 配置类型的 `__add` | `Money(1) + Money(2)` | 走生成的 `Operators` |
 | `typeof`/`cast`/`uint64` | 脚本调用 | 返回 `Type`、对象视图与无符号结果 |
 | `xlua.get_generic_method` | 调用泛型方法 | 与 `lua_loom_generic` 结果一致 |
+| table 作为 class 参数 | `Sum({ X = 1, Y = 2 })` | 自动转成 `Point` 后返回 `3` |
 | 只绑定 `Hp` 的 `Player` | 读 `Name`、调 `Join` | 回落反射成功 |
 | 空绑定 + `Emitter` | 订阅 `Changed` 并 `Raise` | 回调收到参数 |
 | `TryParse(string, out int)` | 传 `"42"` | 返回 `true, 42` |

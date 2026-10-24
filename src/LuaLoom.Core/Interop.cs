@@ -1278,6 +1278,25 @@ internal static class Interop
                 : null;
         }
 
+        if (value is LuaTable table
+            && underlying != typeof(object)
+            && !typeof(LuaReference).IsAssignableFrom(underlying)
+            && (underlying.IsClass || underlying.IsInterface
+                || (underlying.IsValueType && !underlying.IsPrimitive && !underlying.IsEnum)))
+        {
+            try
+            {
+                return typeof(LuaTable)
+                    .GetMethod(nameof(LuaTable.Cast))!
+                    .MakeGenericMethod(underlying)
+                    .Invoke(table, null);
+            }
+            catch (TargetInvocationException exception) when (exception.InnerException is not null)
+            {
+                throw exception.InnerException;
+            }
+        }
+
         if (underlying.IsInstanceOfType(value))
         {
             return value;

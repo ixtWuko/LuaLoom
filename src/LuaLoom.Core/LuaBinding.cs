@@ -83,6 +83,22 @@ public static class LuaBinding
     public static object? ReadObject(IntPtr state, int index) =>
         LuaMarshalRegistry.Get(state).ReadObject(index);
 
+    public static T ReadObjectAs<T>(IntPtr state, int index)
+    {
+        var value = LuaMarshalRegistry.Get(state).ReadObject(index);
+        if (value is T typed)
+        {
+            return typed;
+        }
+
+        if (value is LuaTable table)
+        {
+            return table.Cast<T>();
+        }
+
+        throw new LuaConversionException(typeof(T).Name, value?.GetType().Name ?? "nil", index);
+    }
+
     public static T[] ReadArray<T>(IntPtr state, int index) =>
         LuaMarshalRegistry.Get(state).ReadArray<T>(index);
 

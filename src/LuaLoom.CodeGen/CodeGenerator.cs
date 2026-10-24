@@ -1809,7 +1809,12 @@ public static class CodeGenerator
             return $"({TypeRef(type)})global::LuaLoom.LuaBinding.ReadLong(L, {index})";
         }
 
-        return $"({TypeRef(type)})global::LuaLoom.LuaBinding.ReadObject(L, {index})!";
+        if (Is(type, typeof(object)))
+        {
+            return $"global::LuaLoom.LuaBinding.ReadObject(L, {index})";
+        }
+
+        return $"global::LuaLoom.LuaBinding.ReadObjectAs<{TypeRef(type)}>(L, {index})";
     }
 
     private static string PushStatement(Type type, string expression)

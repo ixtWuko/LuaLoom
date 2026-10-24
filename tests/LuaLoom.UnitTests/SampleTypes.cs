@@ -174,6 +174,17 @@ public static class Overloads
     public static int Legacy() => 1;
 }
 
+public sealed class Point
+{
+    public int X;
+    public int Y;
+}
+
+public static class PointMath
+{
+    public static int Sum(Point point) => point.X + point.Y;
+}
+
 public static class ArrayMethods
 {
     public static int Sum(int[] values)
