@@ -118,6 +118,9 @@ internal sealed class LuaMarshal : IDisposable
         Environment?.EnsureThread();
     }
 
+    /// <summary>当前调用是否在虚拟机线程上；未绑定环境时视为是。</summary>
+    internal bool IsOnOwnerThread => Environment?.IsCurrentThread ?? true;
+
     public int DrainDeferredReleases()
     {
         var count = 0;
@@ -387,13 +390,14 @@ internal sealed class LuaMarshal : IDisposable
 
         if (type == typeof(bool))
         {
+            // Lua 真值语义：nil 与 false 为假，其余为真
             var value = LuaApi.lua_toboolean(_state, index) != 0;
             return Unsafe.As<bool, T>(ref value);
         }
 
         if (type == typeof(int))
         {
-            var value = checked((int)ReadInteger(index, type));
+            var value = (int)ReadIntegerInRange(index, int.MinValue, int.MaxValue, "int");
             return Unsafe.As<int, T>(ref value);
         }
 
@@ -411,37 +415,43 @@ internal sealed class LuaMarshal : IDisposable
 
         if (type == typeof(uint))
         {
-            var value = checked((uint)ReadInteger(index, type));
+            var value = (uint)ReadIntegerInRange(index, uint.MinValue, uint.MaxValue, "uint");
             return Unsafe.As<uint, T>(ref value);
         }
 
         if (type == typeof(short))
         {
-            var value = checked((short)ReadInteger(index, type));
+            var value = (short)ReadIntegerInRange(index, short.MinValue, short.MaxValue, "short");
             return Unsafe.As<short, T>(ref value);
         }
 
         if (type == typeof(ushort))
         {
-            var value = checked((ushort)ReadInteger(index, type));
+            var value = (ushort)ReadIntegerInRange(index, ushort.MinValue, ushort.MaxValue, "ushort");
             return Unsafe.As<ushort, T>(ref value);
         }
 
         if (type == typeof(byte))
         {
-            var value = checked((byte)ReadInteger(index, type));
+            var value = (byte)ReadIntegerInRange(index, byte.MinValue, byte.MaxValue, "byte");
             return Unsafe.As<byte, T>(ref value);
         }
 
         if (type == typeof(sbyte))
         {
-            var value = checked((sbyte)ReadInteger(index, type));
+            var value = (sbyte)ReadIntegerInRange(index, sbyte.MinValue, sbyte.MaxValue, "sbyte");
             return Unsafe.As<sbyte, T>(ref value);
         }
 
         if (type == typeof(float))
         {
-            var value = (float)ReadNumber(index, type);
+            var number = ReadNumber(index, type);
+            var value = (float)number;
+            if (float.IsInfinity(value) && !double.IsInfinity(number))
+            {
+                throw Conversion("float", index);
+            }
+
             return Unsafe.As<float, T>(ref value);
         }
 
@@ -454,7 +464,7 @@ internal sealed class LuaMarshal : IDisposable
         if (type == typeof(string))
         {
             var value = ReadString(index);
-            return Unsafe.As<string, T>(ref value);
+            return Unsafe.As<string?, T>(ref value);
         }
 
         if (type == typeof(decimal))
@@ -991,9 +1001,26 @@ internal sealed class LuaMarshal : IDisposable
         return isInteger != 0 ? (object)integer : LuaApi.lua_tonumberx(_state, index, out _);
     }
 
-    private string ReadString(int index)
+    private long ReadIntegerInRange(int index, long minimum, long maximum, string expected)
     {
-        if (LuaApi.lua_type(_state, index) != LuaApi.LuaTString)
+        var value = ReadInteger(index, typeof(int));
+        if (value < minimum || value > maximum)
+        {
+            throw Conversion(expected, index);
+        }
+
+        return value;
+    }
+
+    private string? ReadString(int index)
+    {
+        var luaType = LuaApi.lua_type(_state, index);
+        if (luaType == LuaApi.LuaTNil)
+        {
+            return null;
+        }
+
+        if (luaType != LuaApi.LuaTString && luaType != LuaApi.LuaTNumber)
         {
             throw Conversion("string", index);
         }

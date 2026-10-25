@@ -43,6 +43,24 @@ public sealed class EventTests
     }
 
     [Fact]
+    public void DuplicateSubscribe_ReplacesPreviousHandler()
+    {
+        using var env = new LuaEnv();
+
+        var result = env.DoString($$"""
+            local emitter = {{Emitter}}()
+            local count = 0
+            local fn = function(value) count = count + 1 end
+            emitter:Changed('+', fn)
+            emitter:Changed('+', fn)
+            emitter:Raise(1)
+            return count
+            """);
+
+        Assert.Equal(1L, result[0]);
+    }
+
+    [Fact]
     public void InvalidOperator_Throws()
     {
         using var env = new LuaEnv();

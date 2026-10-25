@@ -34,6 +34,20 @@ public static class LuaEventBridge
         }
     }
 
+    /// <summary>取出并移除已有订阅；重复订阅时由调用方先把它从事件上摘掉。</summary>
+    public static Delegate? Take(object instance, string eventName, IntPtr pointer)
+    {
+        if (!Table.TryGetValue(instance, out var subscriptions))
+        {
+            return null;
+        }
+
+        lock (subscriptions)
+        {
+            return subscriptions.Take(eventName, pointer);
+        }
+    }
+
     private sealed class Subscriptions
     {
         private readonly Dictionary<string, Dictionary<IntPtr, (Delegate Handler, LuaFunction Function)>> _events = new();
@@ -64,6 +78,11 @@ public static class LuaEventBridge
 
             entry.Function.Dispose();
             return entry.Handler;
+        }
+
+        public Delegate? Take(string name, IntPtr pointer)
+        {
+            return Remove(name, pointer);
         }
     }
 }

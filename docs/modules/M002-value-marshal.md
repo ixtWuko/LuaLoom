@@ -218,7 +218,11 @@ id 的复用交给 `luaL_ref` 自带的空闲链，不再维护第二套。
 | 栈上是 string，读取 `int` | `Read<int>` | 抛 `LuaConversionException`，消息含 `String` 与期望 `Int32` |
 | 栈上是 `3.7`，读取 `int` | `Read<int>` | 抛 `LuaConversionException`（小数部分不为 0） |
 | 栈上是 `nil`，读取 `int` | `Read<int>` | 抛 `LuaConversionException` |
-| 未注册的自定义类型 | `Push` | 抛 `NotSupportedException` |
+| 栈上是数字或其它类型，读取 `bool` | `Read<bool>` | 按 Lua 真值语义：`nil`/`false` 为假，其余为真 |
+| 栈上是 `4000000000`，读取 `int` | `Read<int>` | 抛 `LuaConversionException`（不再抛 `OverflowException`） |
+| 栈上是 `1e300`，读取 `float` | `Read<float>` | 抛 `LuaConversionException`（不再得到 `Infinity`） |
+| 栈上是数字，读取 `string` | `Read<string>` | 返回数字的字符串形式（Lua `tostring` 语义）；`nil` 读作 `null` |
+| 未注册的值类型（无自定义 marshaler） | `Push` | 抛 `NotSupportedException` |
 | 引用释放后再次使用 id | 读取句柄 | 抛 `ObjectDisposedException` |
 | 表 `{hp=100}` | `Get<int>("hp")` / `Get<int>("mp")` | 返回 `100` / 返回 `0` |
 | 表 `{hp="x"}` | `Get<int>("hp")` | 抛 `LuaConversionException`，消息含键名 |

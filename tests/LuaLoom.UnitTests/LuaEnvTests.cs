@@ -290,6 +290,24 @@ public sealed class LuaEnvTests
     }
 
     [Fact]
+    public void HandleDisposeFromOtherThread_IsDeferredToTick()
+    {
+        using var env = new LuaEnv();
+        var table = env.NewTable();
+
+        var thread = new Thread(() => table.Dispose());
+        thread.Start();
+        thread.Join();
+
+        Assert.True(table.IsDisposed);
+        Assert.Equal(1, env.Marshal.DeferredReleaseCount);
+
+        env.Tick();
+        Assert.Equal(0, env.Marshal.DeferredReleaseCount);
+        Assert.Equal(2L, env.DoString("return 1 + 1")[0]);
+    }
+
+    [Fact]
     public void GcParameters_ReadingTwice_KeepsValues()
     {
         using var env = new LuaEnv();

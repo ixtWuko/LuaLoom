@@ -42,19 +42,25 @@ public static class LuaBinding
     /// <summary>当前栈顶索引；生成代码用它判断实参个数。</summary>
     public static int GetTop(IntPtr state) => LuaApi.lua_gettop(state);
 
-    public static int ReadInt(IntPtr state, int index) => checked((int)ReadInteger(state, index));
+    public static int ReadInt(IntPtr state, int index) =>
+        (int)ReadIntegerInRange(state, index, int.MinValue, int.MaxValue, "int");
 
     public static long ReadLong(IntPtr state, int index) => ReadInteger(state, index);
 
-    public static byte ReadByte(IntPtr state, int index) => checked((byte)ReadInteger(state, index));
+    public static byte ReadByte(IntPtr state, int index) =>
+        (byte)ReadIntegerInRange(state, index, byte.MinValue, byte.MaxValue, "byte");
 
-    public static sbyte ReadSByte(IntPtr state, int index) => checked((sbyte)ReadInteger(state, index));
+    public static sbyte ReadSByte(IntPtr state, int index) =>
+        (sbyte)ReadIntegerInRange(state, index, sbyte.MinValue, sbyte.MaxValue, "sbyte");
 
-    public static short ReadShort(IntPtr state, int index) => checked((short)ReadInteger(state, index));
+    public static short ReadShort(IntPtr state, int index) =>
+        (short)ReadIntegerInRange(state, index, short.MinValue, short.MaxValue, "short");
 
-    public static ushort ReadUShort(IntPtr state, int index) => checked((ushort)ReadInteger(state, index));
+    public static ushort ReadUShort(IntPtr state, int index) =>
+        (ushort)ReadIntegerInRange(state, index, ushort.MinValue, ushort.MaxValue, "ushort");
 
-    public static uint ReadUInt(IntPtr state, int index) => checked((uint)ReadInteger(state, index));
+    public static uint ReadUInt(IntPtr state, int index) =>
+        (uint)ReadIntegerInRange(state, index, uint.MinValue, uint.MaxValue, "uint");
 
     public static ulong ReadULong(IntPtr state, int index) => unchecked((ulong)ReadInteger(state, index));
 
@@ -85,16 +91,20 @@ public static class LuaBinding
         return LuaApi.lua_tonumberx(state, index, out _);
     }
 
-    public static bool ReadBoolean(IntPtr state, int index)
+    /// <summary>读取 float，超出 float 范围时报转换错误而不是得到 Infinity。</summary>
+    public static float ReadFloat(IntPtr state, int index)
     {
-        var type = LuaApi.lua_type(state, index);
-        if (type != LuaApi.LuaTBoolean && type != LuaApi.LuaTNil)
+        var value = ReadDouble(state, index);
+        var single = (float)value;
+        if (float.IsInfinity(single) && !double.IsInfinity(value))
         {
-            throw Conversion(state, index, "boolean");
+            throw Conversion(state, index, "float");
         }
 
-        return LuaApi.lua_toboolean(state, index) != 0;
+        return single;
     }
+
+    public static bool ReadBoolean(IntPtr state, int index) => LuaApi.lua_toboolean(state, index) != 0;
 
     public static string? ReadString(IntPtr state, int index)
     {
@@ -135,7 +145,14 @@ public static class LuaBinding
 
         if (value is LuaTable table)
         {
-            return table.Cast<T>();
+            try
+            {
+                return table.Cast<T>();
+            }
+            finally
+            {
+                table.Dispose();
+            }
         }
 
         throw new LuaConversionException(typeof(T).Name, value?.GetType().Name ?? "nil", index);
@@ -271,6 +288,22 @@ public static class LuaBinding
         if (isNumber == 0)
         {
             throw Conversion(state, index, "integer");
+        }
+
+        return value;
+    }
+
+    private static long ReadIntegerInRange(
+        IntPtr state,
+        int index,
+        long minimum,
+        long maximum,
+        string expected)
+    {
+        var value = ReadInteger(state, index);
+        if (value < minimum || value > maximum)
+        {
+            throw Conversion(state, index, expected);
         }
 
         return value;

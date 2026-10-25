@@ -149,7 +149,7 @@ var memory = env.MemorySnapshot(top: 10);
 
 ## 8. 线程与生命周期
 
-- 虚拟机与句柄都是单线程的。`LuaEnv` 的公共入口与句柄的读写成员在跨线程调用时抛 `InvalidOperationException`；句柄的 `Dispose` 不做线程检查，必须在创建环境的线程调用。
+- 虚拟机与句柄都是单线程的。`LuaEnv` 的公共入口与句柄的读写成员在跨线程调用时抛 `InvalidOperationException`；句柄的 `Dispose` 在其它线程调用时不直接改 Lua 状态，而是把释放排到 `Tick()` 执行。
 - 句柄实现 `IDisposable`，建议 `using`；漏掉的由终结器入队，调用 `env.Tick()` 在宿主线程回收。
 - 句柄释放后使用抛 `ObjectDisposedException`；环境释放后使用任何句柄同样抛该异常。
 

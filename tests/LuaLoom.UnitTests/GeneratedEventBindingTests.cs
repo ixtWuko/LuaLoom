@@ -56,9 +56,15 @@ public sealed class GeneratedEventBindingTests
         var op = LuaBinding.ReadString(state, 2);
         if (op == "+")
         {
+            var pointer = LuaBinding.GetFunctionPointer(state, 3);
+            if (LuaEventBridge.Take(self, "Changed", pointer) is Action<int> previous)
+            {
+                self.Changed -= previous;
+            }
+
             var function = LuaBinding.CreateFunction(state, 3);
             var handler = new Action<int>(value => function.Call(value));
-            LuaEventBridge.Add(self, "Changed", LuaBinding.GetFunctionPointer(state, 3), handler, function);
+            LuaEventBridge.Add(self, "Changed", pointer, handler, function);
             self.Changed += handler;
             return 0;
         }

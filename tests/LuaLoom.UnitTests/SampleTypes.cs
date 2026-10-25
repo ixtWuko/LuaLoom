@@ -597,6 +597,36 @@ public sealed class AmbiguousSurface
     public static void Use(Size2 value) => _ = value;
 }
 
+public interface INamingCollision
+{
+    int Calc(int function, int args, int results, int result);
+}
+
+public sealed class KeywordSurface
+{
+    public int @class;
+    public int @value { get; set; }
+
+    public int @base(int @params) => @params + 1;
+}
+
+public sealed class DualIndexer
+{
+    private readonly Dictionary<object, string> _values = new();
+
+    public string this[int index]
+    {
+        get => _values.TryGetValue(index, out var value) ? value : "int-miss";
+        set => _values[index] = value;
+    }
+
+    public string this[object key]
+    {
+        get => _values.TryGetValue(key, out var value) ? value : "object-miss";
+        set => _values[key] = value;
+    }
+}
+
 public sealed class PartialSurface
 {
     private static int _value;

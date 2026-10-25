@@ -24,7 +24,16 @@ public abstract class LuaReference : IDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
-            Marshal.ReleaseReference(Id);
+            // 非创建线程不能直接改 Lua 状态（luaL_unref），改为入队，由宿主线程的 Tick() 回收
+            if (Marshal.IsOnOwnerThread)
+            {
+                Marshal.ReleaseReference(Id);
+            }
+            else
+            {
+                Marshal.EnqueueRelease(Id);
+            }
+
             GC.SuppressFinalize(this);
         }
     }

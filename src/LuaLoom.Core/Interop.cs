@@ -826,16 +826,17 @@ internal static class Interop
 
     private static int ReadIndexer(LuaEnv environment, IntPtr state, object instance)
     {
+        var key = environment.Marshal.ReadObject(2);
         var indexer = IndexerOf(
             instance.GetType(),
-            environment.IsPrivateAccessible(instance.GetType()));
+            environment.IsPrivateAccessible(instance.GetType()),
+            key);
         if (indexer is null)
         {
             LuaApi.lua_pushnil(state);
             return 1;
         }
 
-        var key = environment.Marshal.ReadObject(2);
         var value = indexer.GetValue(
             instance,
             [ConvertValue(key, indexer.GetIndexParameters()[0].ParameterType)]);
@@ -845,16 +846,17 @@ internal static class Interop
 
     private static int WriteIndexer(LuaEnv environment, IntPtr state, object instance)
     {
+        var key = environment.Marshal.ReadObject(2);
+        var value = environment.Marshal.ReadObject(3);
         var indexer = IndexerOf(
             instance.GetType(),
-            environment.IsPrivateAccessible(instance.GetType()));
+            environment.IsPrivateAccessible(instance.GetType()),
+            key);
         if (indexer is null)
         {
             throw new MissingMemberException(instance.GetType().FullName, "Item");
         }
 
-        var key = environment.Marshal.ReadObject(2);
-        var value = environment.Marshal.ReadObject(3);
         indexer.SetValue(
             instance,
             ConvertValue(value, indexer.PropertyType),
@@ -862,7 +864,7 @@ internal static class Interop
         return 0;
     }
 
-    private static PropertyInfo? IndexerOf(Type type, bool includeNonPublic)
+    private static PropertyInfo? IndexerOf(Type type, bool includeNonPublic, object? key)
     {
         var flags = BindingFlags.Public | BindingFlags.Instance;
         if (includeNonPublic)
@@ -870,10 +872,82 @@ internal static class Interop
             flags |= BindingFlags.NonPublic;
         }
 
-        return type.GetProperties(flags)
+        var candidates = type.GetProperties(flags)
             .Where(static p => p.GetIndexParameters().Length == 1)
             .OrderBy(static p => p.GetMethod?.IsPublic == true ? 0 : 1)
-            .FirstOrDefault();
+            .ToList();
+
+        if (candidates.Count <= 1)
+        {
+            return candidates.FirstOrDefault();
+        }
+
+        // 有多个索引器时按 Lua 键的实际类型打分挑选；都挑不中也退回第一个，保持旧行为
+        PropertyInfo? best = null;
+        var bestScore = int.MinValue;
+        foreach (var candidate in candidates)
+        {
+            var score = KeyMatchScore(key, candidate.GetIndexParameters()[0].ParameterType);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+
+        return best ?? candidates[0];
+    }
+
+    private static int KeyMatchScore(object? key, Type parameterType)
+    {
+        if (!IsKeyCompatible(key, parameterType))
+        {
+            return int.MinValue;
+        }
+
+        var target = Nullable.GetUnderlyingType(parameterType) ?? parameterType;
+        if (key is null || target == typeof(object))
+        {
+            return 1;
+        }
+
+        return target.IsInstanceOfType(key) ? 3 : 2;
+    }
+
+    private static bool IsKeyCompatible(object? key, Type parameterType)
+    {
+        var target = Nullable.GetUnderlyingType(parameterType) ?? parameterType;
+        if (key is null)
+        {
+            return !parameterType.IsValueType || Nullable.GetUnderlyingType(parameterType) is not null;
+        }
+
+        if (target == typeof(object) || target.IsInstanceOfType(key))
+        {
+            return true;
+        }
+
+        if (target.IsEnum)
+        {
+            return key is long or string;
+        }
+
+        if (IsIntegral(target))
+        {
+            return key is long;
+        }
+
+        if (target == typeof(double) || target == typeof(float))
+        {
+            return key is long or double;
+        }
+
+        if (target == typeof(string))
+        {
+            return key is long or string;
+        }
+
+        return false;
     }
 
     internal static MethodInfo? SearchExtensionMethod(
@@ -940,6 +1014,14 @@ internal static class Interop
                 try
                 {
                     var handler = LuaEventDelegateFactory.Create(eventInfo.EventHandlerType!, function);
+
+                    // 同一个 Lua 函数重复订阅时替换旧订阅，避免事件链上留下已释放的委托
+                    if (handlers.Remove(pointer, out var previous))
+                    {
+                        previous.Function.Dispose();
+                        eventInfo.RemoveEventHandler(instance, previous.Handler);
+                    }
+
                     handlers[pointer] = (handler, function);
                     eventInfo.AddEventHandler(instance, handler);
                 }
@@ -1447,6 +1529,15 @@ internal static class Interop
 
     private static bool TryConvert(object? value, Type target, out object? converted)
     {
+        if (value is null
+            && target.IsValueType
+            && Nullable.GetUnderlyingType(target) is null)
+        {
+            // 方法实参传 nil 给值类型参数视为不匹配；Cast 的缺失字段不走这里，仍保留默认值
+            converted = null;
+            return false;
+        }
+
         try
         {
             converted = ConvertValue(value, target);

@@ -41,7 +41,7 @@
 | E9 | `CS.Namespace.Type(...)` 能构造已注册类型的对象、访问静态成员；未注册类型走反射仍可用 | 脚本调用断言 |
 | E10 | `+ - * / %`、一元 `-`、`==`、`<`、`<=` 转发到 C# 运算符；配置类型优先走生成 thunk | 构造带运算符的类型断言结果 |
 | E11 | 非字符串键访问优先走绑定索引器，未命中再反射 `this[...]` | `bag[1] = 5; return bag[1]` |
-| E12 | `('+', fn)` 订阅、`('-', fn)` 退订；配置类型优先走生成的事件 thunk，未配置回退反射 | 计数用例验证退订后不再触发 |
+| E12 | `('+', fn)` 订阅、`('-', fn)` 退订，同一函数重复订阅替换旧订阅；配置类型优先走生成的事件 thunk，未配置回退反射 | 计数用例验证退订后不再触发、重复订阅只触发一次 |
 | E13 | `lua_loom_generic(type, 'Method', T1, ...)` 闭合泛型方法并调用，静态与实例都可用 | 两个用例分别验证 |
 | E14 | 基本类型数组与 `List` 读取走专用路径，不逐元素装箱 | `int[1000]` 分配量小于 8KB |
 | E15 | 绑定只覆盖部分成员时，未命中的键回落到反射，继承成员与事件仍可用 | 只绑定 `Hp` 后读 `Name`、订阅事件 |
@@ -172,8 +172,8 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 8. 类型解析：先查已注册的 `LuaTypeBinding`，再按 `EnableReflectionFallback` 走反射，最后抛 Lua 错误；类表统一安装带 `fqn` 的分派入口，绑定未命中的键继续走反射。`StrictReflection = true` 时，未注册类型、绑定未命中的成员、反射版构造/事件/操作符/索引器/泛型调用与反射扩展查找都直接抛错；`typeof`、`cast`、`xlua.private_accessible` 等显式反射 API 不受影响。
 9. 参数装配：`out` 填默认值且不消耗实参，`ref` 与普通参数各消耗一个，`params` 把剩余实参转换后写入数组；调用后先压返回值（非 `void`），再按参数顺序压 `ref`/`out`，`in` 不回写。生成绑定对单方法与复杂重载组执行同一规则；只有未配置或无法生成的成员才回退反射。
 10. 操作符：实例 metatable 上挂 `__add`/`__sub`/`__mul`/`__div`/`__mod`/`__unm`/`__eq`/`__lt`/`__le`；C# delegate 的 `+`/`-` 直接走 `Delegate.Combine`/`Remove`；其余先查配置类型的生成 `Operators`，未命中再按名称查 `op_*` 静态方法。`__unm` 按 Lua 约定收到两个相同操作数，只取第一个匹配单参数方法；`__eq` 无运算符时退回引用比较。
-11. 索引器：键不是字符串时先查绑定的 `InstanceIndexer`/`InstanceIndexerSet`，未处理再走 `this[...]` 反射；`xlua.private_accessible` 标记后反射索引器也包含非公共成员。字符串键仍按成员名解析。
-12. 事件：配置类型优先返回生成的订阅 thunk，未生成时回退 `EventInfo` 反射。`('+', fn)` 用生成的委托 lambda 或 `LuaEventDelegateFactory` 包装 Lua 函数，`('-', fn)` 按 `lua_topointer` 找到同一函数对应的委托并移除，随后释放函数句柄。订阅关系存放在 `ConditionalWeakTable`，对象被回收时随之释放。Lua 表实现接口时，生成的接口实现把 `add_<Event>`/`remove_<Event>` 转发给表函数；传给 Lua 的 C# delegate 可通过 `__call` 调用。
+11. 索引器：键不是字符串时先查绑定的 `InstanceIndexer`/`InstanceIndexerSet`，未处理再走 `this[...]` 反射；同一类型有多个索引器时按键的实际类型（整数、浮点、userdata 等）挑选，挑不中退回声明顺序第一个。`xlua.private_accessible` 标记后反射索引器也包含非公共成员。字符串键仍按成员名解析。
+12. 事件：配置类型优先返回生成的订阅 thunk，未生成时回退 `EventInfo` 反射。`('+', fn)` 用生成的委托 lambda 或 `LuaEventDelegateFactory` 包装 Lua 函数；同一函数重复订阅时先摘掉旧委托再订阅，避免事件链上残留已释放的句柄。`('-', fn)` 按 `lua_topointer` 找到同一函数对应的委托并移除，随后释放函数句柄。订阅关系存放在 `ConditionalWeakTable`，对象被回收时随之释放。Lua 表实现接口时，生成的接口实现把 `add_<Event>`/`remove_<Event>` 转发给表函数；传给 Lua 的 C# delegate 可通过 `__call` 调用。
 13. 泛型方法：`lua_loom_generic(type, methodName, T1, ...)` 解析泛型定义，按类型参数个数匹配；先查生成器注册的闭合实例（`RegisterGenericMethod`），命中直接调用，未命中再 `MakeGenericMethod` 反射闭合；严格模式下未命中直接抛错。静态方法参数从索引 1 开始，实例方法索引 1 是对象、参数从 2 开始。
 14. 扩展方法：实例成员未命中时，先查生成器注册的 `RegisterExtensionMethod` 分派表；未命中再在 `RegisterExtensionType` 注册过的 public static 类中查找 `ExtensionAttribute` 方法。要求首参类型可由实例类型赋值；反射扫描结果按 `(Type, Name)` 缓存。未注册的扩展类不会被扫描或访问。
 15. xLua 兼容 API：`typeof` 返回 `Type` 对象；`cast` 校验对象可赋值后返回同一对象视图；`uint64.*` 用无符号位模式实现解析、比较、除法与取模；`xlua.get_generic_method` 是 `lua_loom_generic` 的 `xlua` 命名空间别名；`xlua.private_accessible` 把类型加入非公共成员可见集合；`xlua.structclone` 复制原始 struct userdata 字节。
@@ -218,6 +218,8 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 | `int[]` 参数与返回值 | `Sum({1,2,3})` 与 `Double({1,2})` | 生成绑定与反射结果一致 |
 | 配置类型的 `__add` | `Money(1) + Money(2)` | 走生成的 `Operators` |
 | 配置类型的事件 | `emitter:Changed('+', fn)` / `('-', fn)` | 走生成的 `Event_*` thunk |
+| 同一函数重复订阅 | `('+', fn)` 两次后触发一次 | 旧委托被替换，只触发一次 |
+| 多个非字符串索引器 | `dual[1]` / `dual[2.5]` | 按键类型选择对应索引器 |
 | `typeof`/`cast`/`uint64` | 脚本调用 | 返回 `Type`、对象视图与无符号结果 |
 | `xlua.get_generic_method` | 调用泛型方法 | 与 `lua_loom_generic` 结果一致 |
 | `xlua.private_accessible` | 访问私有字段/方法/索引器 | 标记后可见，标记前不可见 |

@@ -27,7 +27,7 @@
 | E4 | 自定义 loader 返回 `byte[]` 时 `require` 成功；返回 `null` 时继续下一个 loader | 注册两个 loader，观察命中顺序 |
 | E5 | 所有 loader 都失败时抛 `LuaException`，消息含模块名与搜索过的 loader 数量 | 断言消息 |
 | E6 | 脚本报错时异常消息包含 `chunkName`、行号与 traceback | 执行 `error('boom')` 断言 |
-| E7 | 子线程调用 `LuaEnv` 公共成员或句柄的读写成员抛 `InvalidOperationException`；句柄的 `Dispose` 不做线程检查 | 跨线程测试 |
+| E7 | 子线程调用 `LuaEnv` 公共成员或句柄的读写成员抛 `InvalidOperationException`；句柄的 `Dispose` 在子线程调用时排队到 `Tick()` | 跨线程测试 |
 | E8 | 重复 `Dispose` 不抛异常 | 连调两次 |
 | E9 | 未显式释放的句柄由终结器入队，`Tick()` 后回收 | 放弃句柄引用，强制 GC 后 Tick，查引用计数 |
 | E10 | `CreateCoroutine()` 返回可推进的协程句柄；`Resume` 传入参数并返回 `yield`/`return` 的值 | 两次 `Resume` 的返回值与状态变化 |
@@ -170,8 +170,7 @@ update(0.016);
 - `MemoryBytes` 取 `lua_gc(LUA_GCCOUNT)` 与 `LUA_GCCOUNTB` 合成字节数。
 - `Tick()` 调用 `_marshal.DrainDeferredReleases()` 消费终结器入队的 id，并执行一次 `lua_gc(LUA_GCSTEP)`。
 - `Dispose()`：检查线程 → 置位标记 → 从 `Interop` 与 `Environments` 摘除 → 释放 marshal → `lua_close`。loader 列表与原生库句柄不在这里清理，原生库由进程生命周期持有。
-- 终结器回收走 `LuaMarshal.EnqueueRelease(id)`，由 `Tick()` 消费；显式 `Dispose` 立即 `luaL_unref`。
-- 句柄的 `Dispose` 不做线程检查，必须在创建环境的线程调用；`LuaEnv.Global` 也不做检查。
+- 终结器回收走 `LuaMarshal.EnqueueRelease(id)`，由 `Tick()` 消费；显式 `Dispose` 在虚拟机线程上立即 `luaL_unref`，在其它线程上改为入队。
 
 **线程约束**：`LuaEnv` 的公共入口与句柄的读写成员走 `EnsureThread()`，比较 `Environment.CurrentManagedThreadId`，不一致抛 `InvalidOperationException`；`CheckThreadAffinity=false` 时跳过检查但不保证安全。
 

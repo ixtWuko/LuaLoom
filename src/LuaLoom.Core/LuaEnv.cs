@@ -404,4 +404,7 @@ public sealed partial class LuaEnv : IDisposable
                 $"LuaEnv is single-threaded. Created on thread {_ownerThreadId}, called from {Environment.CurrentManagedThreadId}.");
         }
     }
+
+    internal bool IsCurrentThread =>
+        !_options.CheckThreadAffinity || Environment.CurrentManagedThreadId == _ownerThreadId;
 }

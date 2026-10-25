@@ -1242,13 +1242,13 @@ public static class CodeGenerator
         foreach (var property in properties)
         {
             builder.AppendLine(
-                $"        value.{property.Name} = global::LuaLoom.LuaBinding.ConvertObject<{TypeRef(property.PropertyType)}>(table.Get<object>(\"{property.Name}\"));");
+                $"        value.{Id(property.Name)} = global::LuaLoom.LuaBinding.ConvertObject<{TypeRef(property.PropertyType)}>(table.Get<object>(\"{property.Name}\"));");
         }
 
         foreach (var field in fields)
         {
             builder.AppendLine(
-                $"        value.{field.Name} = global::LuaLoom.LuaBinding.ConvertObject<{TypeRef(field.FieldType)}>(table.Get<object>(\"{field.Name}\"));");
+                $"        value.{Id(field.Name)} = global::LuaLoom.LuaBinding.ConvertObject<{TypeRef(field.FieldType)}>(table.Get<object>(\"{field.Name}\"));");
         }
 
         builder.AppendLine("        return value;");
@@ -1309,14 +1309,14 @@ public static class CodeGenerator
         foreach (var property in properties)
         {
             builder.AppendLine($"            case \"{property.Name}\":");
-            builder.AppendLine($"                {PushStatement(property.PropertyType, $"{TypeRef(type)}.{property.Name}")}");
+            builder.AppendLine($"                {PushStatement(property.PropertyType, $"{TypeRef(type)}.{Id(property.Name)}")}");
             builder.AppendLine("                return 1;");
         }
 
         foreach (var field in fields)
         {
             builder.AppendLine($"            case \"{field.Name}\":");
-            builder.AppendLine($"                {PushStatement(field.FieldType, $"{TypeRef(type)}.{field.Name}")}");
+            builder.AppendLine($"                {PushStatement(field.FieldType, $"{TypeRef(type)}.{Id(field.Name)}")}");
             builder.AppendLine("                return 1;");
         }
 
@@ -1351,7 +1351,7 @@ public static class CodeGenerator
         {
             builder.AppendLine($"            case \"{property.Name}\":");
             builder.AppendLine(
-                $"                {TypeRef(type)}.{property.Name} = {ReadExpression(property.PropertyType, 3)};");
+                $"                {TypeRef(type)}.{Id(property.Name)} = {ReadExpression(property.PropertyType, 3)};");
             builder.AppendLine("                return 0;");
         }
 
@@ -1359,7 +1359,7 @@ public static class CodeGenerator
         {
             builder.AppendLine($"            case \"{field.Name}\":");
             builder.AppendLine(
-                $"                {TypeRef(type)}.{field.Name} = {ReadExpression(field.FieldType, 3)};");
+                $"                {TypeRef(type)}.{Id(field.Name)} = {ReadExpression(field.FieldType, 3)};");
             builder.AppendLine("                return 0;");
         }
 
@@ -1394,14 +1394,14 @@ public static class CodeGenerator
         foreach (var property in properties)
         {
             builder.AppendLine($"            case \"{property.Name}\":");
-            builder.AppendLine($"                {PushStatement(property.PropertyType, $"self.{property.Name}")}");
+            builder.AppendLine($"                {PushStatement(property.PropertyType, $"self.{Id(property.Name)}")}");
             builder.AppendLine("                return 1;");
         }
 
         foreach (var field in fields)
         {
             builder.AppendLine($"            case \"{field.Name}\":");
-            builder.AppendLine($"                {PushStatement(field.FieldType, $"self.{field.Name}")}");
+            builder.AppendLine($"                {PushStatement(field.FieldType, $"self.{Id(field.Name)}")}");
             builder.AppendLine("                return 1;");
         }
 
@@ -1444,14 +1444,14 @@ public static class CodeGenerator
         foreach (var property in writableProperties)
         {
             builder.AppendLine($"            case \"{property.Name}\":");
-            builder.AppendLine($"                self.{property.Name} = {ReadExpression(property.PropertyType, 3)};");
+            builder.AppendLine($"                self.{Id(property.Name)} = {ReadExpression(property.PropertyType, 3)};");
             builder.AppendLine("                return 0;");
         }
 
         foreach (var field in writableFields)
         {
             builder.AppendLine($"            case \"{field.Name}\":");
-            builder.AppendLine($"                self.{field.Name} = {ReadExpression(field.FieldType, 3)};");
+            builder.AppendLine($"                self.{Id(field.Name)} = {ReadExpression(field.FieldType, 3)};");
             builder.AppendLine("                return 0;");
         }
 
@@ -2291,8 +2291,8 @@ public static class CodeGenerator
         }
 
         var methodName = method.IsGenericMethod
-            ? method.Name + "<" + string.Join(", ", method.GetGenericArguments().Select(TypeRef)) + ">"
-            : method.Name;
+            ? Id(method.Name) + "<" + string.Join(", ", method.GetGenericArguments().Select(TypeRef)) + ">"
+            : Id(method.Name);
         var invocation = isStatic
             ? $"{TypeRef(type)}.{methodName}({string.Join(", ", arguments)})"
             : $"self.{methodName}({string.Join(", ", arguments)})";
@@ -2420,26 +2420,26 @@ public static class CodeGenerator
         if (InterfaceEvents(type).Count > 0)
         {
             builder.AppendLine();
-            builder.AppendLine("    private void CallEvent(string name, global::System.Delegate? value)");
+            builder.AppendLine("    private void __RaiseEvent(string name, global::System.Delegate? value)");
             builder.AppendLine("    {");
-            builder.AppendLine("        using var function = _table.Get<global::LuaLoom.LuaFunction>(name)!;");
-            builder.AppendLine("        function.Call(_table, value);");
+            builder.AppendLine("        using var __luaFunction = _table.Get<global::LuaLoom.LuaFunction>(name)!;");
+            builder.AppendLine("        __luaFunction.Call(_table, value);");
             builder.AppendLine("    }");
         }
 
         foreach (var property in InterfaceProperties(type))
         {
             builder.AppendLine();
-            builder.AppendLine($"    public {TypeRef(property.PropertyType)} {property.Name}");
+            builder.AppendLine($"    public {TypeRef(property.PropertyType)} {Id(property.Name)}");
             builder.AppendLine("    {");
             if (property.GetMethod is not null)
             {
                 builder.AppendLine("        get");
                 builder.AppendLine("        {");
                 builder.AppendLine(
-                    $"            using var function = _table.Get<global::LuaLoom.LuaFunction>(\"get_{property.Name}\")!;");
+                    $"            using var __luaFunction = _table.Get<global::LuaLoom.LuaFunction>(\"get_{property.Name}\")!;");
                 builder.AppendLine(
-                    $"            return global::LuaLoom.LuaBinding.ConvertObject<{TypeRef(property.PropertyType)}>(function.Call(_table)[0]);");
+                    $"            return global::LuaLoom.LuaBinding.ConvertObject<{TypeRef(property.PropertyType)}>(__luaFunction.Call(_table)[0]);");
                 builder.AppendLine("        }");
             }
 
@@ -2448,8 +2448,8 @@ public static class CodeGenerator
                 builder.AppendLine("        set");
                 builder.AppendLine("        {");
                 builder.AppendLine(
-                    $"            using var function = _table.Get<global::LuaLoom.LuaFunction>(\"set_{property.Name}\")!;");
-                builder.AppendLine("            function.Call(_table, value);");
+                    $"            using var __luaFunction = _table.Get<global::LuaLoom.LuaFunction>(\"set_{property.Name}\")!;");
+                builder.AppendLine("            __luaFunction.Call(_table, value);");
                 builder.AppendLine("        }");
             }
 
@@ -2466,12 +2466,12 @@ public static class CodeGenerator
                 : string.Empty;
 
             builder.AppendLine();
-            builder.AppendLine($"    public {TypeRef(method.ReturnType)} {method.Name}{genericArguments}({signature})");
+            builder.AppendLine($"    public {TypeRef(method.ReturnType)} {Id(method.Name)}{genericArguments}({signature})");
             builder.AppendLine("    {");
             builder.AppendLine(
-                $"        using var function = _table.Get<global::LuaLoom.LuaFunction>(\"{method.Name}\")!;");
-            builder.AppendLine("        var args = new global::System.Collections.Generic.List<object?>();");
-            builder.AppendLine("        args.Add(_table);");
+                $"        using var __luaFunction = _table.Get<global::LuaLoom.LuaFunction>(\"{method.Name}\")!;");
+            builder.AppendLine("        var __luaArgs = new global::System.Collections.Generic.List<object?>();");
+            builder.AppendLine("        __luaArgs.Add(_table);");
 
             foreach (var parameter in parameters)
             {
@@ -2480,22 +2480,23 @@ public static class CodeGenerator
                     continue;
                 }
 
+                var name = Id(parameter.Name);
                 if (IsParamArray(parameter))
                 {
-                    builder.AppendLine($"        foreach (var item in {parameter.Name}) args.Add(item);");
+                    builder.AppendLine($"        foreach (var item in {name}) __luaArgs.Add(item);");
                 }
                 else
                 {
-                    builder.AppendLine($"        args.Add({parameter.Name});");
+                    builder.AppendLine($"        __luaArgs.Add({name});");
                 }
             }
 
-            builder.AppendLine("        var results = function.Call(args.ToArray());");
+            builder.AppendLine("        var __luaResults = __luaFunction.Call(__luaArgs.ToArray());");
             var resultIndex = 0;
             if (!Is(method.ReturnType, typeof(void)))
             {
                 builder.AppendLine(
-                    $"        var result = global::LuaLoom.LuaBinding.ConvertObject<{TypeRef(method.ReturnType)}>(results[{resultIndex++}]);");
+                    $"        var __luaResult = global::LuaLoom.LuaBinding.ConvertObject<{TypeRef(method.ReturnType)}>(__luaResults[{resultIndex++}]);");
             }
 
             foreach (var parameter in parameters)
@@ -2506,12 +2507,12 @@ public static class CodeGenerator
                 }
 
                 builder.AppendLine(
-                    $"        {parameter.Name} = global::LuaLoom.LuaBinding.ConvertObject<{TypeRef(parameter.ParameterType.GetElementType()!)}>(results[{resultIndex++}]);");
+                    $"        {Id(parameter.Name)} = global::LuaLoom.LuaBinding.ConvertObject<{TypeRef(parameter.ParameterType.GetElementType()!)}>(__luaResults[{resultIndex++}]);");
             }
 
             if (!Is(method.ReturnType, typeof(void)))
             {
-                builder.AppendLine("        return result;");
+                builder.AppendLine("        return __luaResult;");
             }
 
             builder.AppendLine("    }");
@@ -2520,10 +2521,10 @@ public static class CodeGenerator
         foreach (var eventInfo in InterfaceEvents(type))
         {
             builder.AppendLine();
-            builder.AppendLine($"    public event {TypeRef(eventInfo.EventHandlerType!)} {eventInfo.Name}");
+            builder.AppendLine($"    public event {TypeRef(eventInfo.EventHandlerType!)} {Id(eventInfo.Name)}");
             builder.AppendLine("    {");
-            builder.AppendLine($"        add => CallEvent(\"add_{eventInfo.Name}\", value);");
-            builder.AppendLine($"        remove => CallEvent(\"remove_{eventInfo.Name}\", value);");
+            builder.AppendLine($"        add => __RaiseEvent(\"add_{eventInfo.Name}\", value);");
+            builder.AppendLine($"        remove => __RaiseEvent(\"remove_{eventInfo.Name}\", value);");
             builder.AppendLine("    }");
         }
 
@@ -2739,11 +2740,17 @@ public static class CodeGenerator
             builder.AppendLine("        var op = global::LuaLoom.LuaBinding.ReadString(L, 2);");
             builder.AppendLine("        if (op == \"+\")");
             builder.AppendLine("        {");
+            builder.AppendLine("            var pointer = global::LuaLoom.LuaBinding.GetFunctionPointer(L, 3);");
+            builder.AppendLine($"            if (global::LuaLoom.LuaEventBridge.Take(self, \"{eventInfo.Name}\", pointer) is {TypeRef(handlerType)} previous)");
+            builder.AppendLine("            {");
+            builder.AppendLine($"                self.{Id(eventInfo.Name)} -= previous;");
+            builder.AppendLine("            }");
+            builder.AppendLine();
             builder.AppendLine("            var function = global::LuaLoom.LuaBinding.CreateFunction(L, 3);");
             builder.AppendLine($"            var handler = new {TypeRef(handlerType)}({lambda});");
             builder.AppendLine(
-                $"            global::LuaLoom.LuaEventBridge.Add(self, \"{eventInfo.Name}\", global::LuaLoom.LuaBinding.GetFunctionPointer(L, 3), handler, function);");
-            builder.AppendLine($"            self.{eventInfo.Name} += handler;");
+                $"            global::LuaLoom.LuaEventBridge.Add(self, \"{eventInfo.Name}\", pointer, handler, function);");
+            builder.AppendLine($"            self.{Id(eventInfo.Name)} += handler;");
             builder.AppendLine("            return 0;");
             builder.AppendLine("        }");
             builder.AppendLine("        if (op == \"-\")");
@@ -2752,7 +2759,7 @@ public static class CodeGenerator
                 $"            var handler = global::LuaLoom.LuaEventBridge.Remove(self, \"{eventInfo.Name}\", global::LuaLoom.LuaBinding.GetFunctionPointer(L, 3));");
             builder.AppendLine($"            if (handler is {TypeRef(handlerType)} typed)");
             builder.AppendLine("            {");
-            builder.AppendLine($"                self.{eventInfo.Name} -= typed;");
+            builder.AppendLine($"                self.{Id(eventInfo.Name)} -= typed;");
             builder.AppendLine("            }");
             builder.AppendLine("            return 0;");
             builder.AppendLine("        }");
@@ -2859,18 +2866,30 @@ public static class CodeGenerator
 
     private static string InterfaceParameterSignature(ParameterInfo parameter)
     {
+        var name = Id(parameter.Name);
         if (parameter.ParameterType.IsByRef)
         {
             var modifier = parameter.IsOut ? "out" : parameter.IsIn ? "in" : "ref";
-            return $"{modifier} {TypeRef(parameter.ParameterType.GetElementType()!)} {parameter.Name}";
+            return $"{modifier} {TypeRef(parameter.ParameterType.GetElementType()!)} {name}";
         }
 
         if (IsParamArray(parameter))
         {
-            return $"params {TypeRef(parameter.ParameterType)} {parameter.Name}";
+            return $"params {TypeRef(parameter.ParameterType)} {name}";
         }
 
-        return $"{TypeRef(parameter.ParameterType)} {parameter.Name}";
+        return $"{TypeRef(parameter.ParameterType)} {name}";
+    }
+
+    /// <summary>标识符按需加 <c>@</c> 前缀，避免关键字成员名生成非法代码。</summary>
+    private static string Id(string? name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return "value";
+        }
+
+        return SyntaxFacts.GetKeywordKind(name) != SyntaxKind.None ? "@" + name : name;
     }
 
     private static bool IsSupportedInterfaceMethod(MethodInfo method)
@@ -3202,7 +3221,7 @@ public static class CodeGenerator
 
         if (Is(type, typeof(float)))
         {
-            return $"(float)global::LuaLoom.LuaBinding.ReadDouble(L, {index})";
+            return $"global::LuaLoom.LuaBinding.ReadFloat(L, {index})";
         }
 
         if (Is(type, typeof(bool)))

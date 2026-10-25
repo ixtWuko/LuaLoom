@@ -1,4 +1,5 @@
 using LuaLoom;
+using LuaLoom.Native;
 using Xunit;
 
 namespace LuaLoom.UnitTests;
@@ -31,6 +32,14 @@ public sealed class OverloadTests
         var results = env.DoString($"return {Overloads}.Pick({literal})");
 
         Assert.Equal(expected, results[0]);
+    }
+
+    [Fact]
+    public void NilArgument_DoesNotMatchValueTypeParameter()
+    {
+        using var env = new LuaEnv();
+
+        Assert.Throws<LuaException>(() => env.DoString($"return {Overloads}.Optional(nil)"));
     }
 
     [Fact]

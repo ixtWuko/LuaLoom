@@ -45,6 +45,7 @@ public sealed class CodeGenTests
             "LuaLoom.UnitTests.Sample.DefaultSurface",
             "LuaLoom.UnitTests.Sample.AmbiguousSurface",
             "LuaLoom.UnitTests.Sample.PartialSurface",
+            "LuaLoom.UnitTests.Sample.KeywordSurface",
         ],
         GenericMethods =
         [
@@ -74,6 +75,7 @@ public sealed class CodeGenTests
             "System.Func<int, string>",
             "LuaLoom.UnitTests.Sample.Mapper<int, string>",
             "LuaLoom.UnitTests.Sample.IDerivedSurface",
+            "LuaLoom.UnitTests.Sample.INamingCollision",
         ],
     };
 
@@ -160,7 +162,7 @@ public sealed class CodeGenTests
 
         var eventInterface = result.Files.Single(
             static f => f.FileName == "LuaLoom_UnitTests_Sample_IEventSourceImpl.g.cs");
-        Assert.Contains("add => CallEvent(\"add_Changed\", value)", eventInterface.Content, StringComparison.Ordinal);
+        Assert.Contains("add => __RaiseEvent(\"add_Changed\", value)", eventInterface.Content, StringComparison.Ordinal);
 
         var bag = result.Files.Single(static f => f.FileName == "LuaLoom_UnitTests_Sample_BagBinder.g.cs");
         Assert.Contains("InstanceIndexer = IndexerGet", bag.Content, StringComparison.Ordinal);
@@ -952,6 +954,16 @@ public sealed class CodeGenTests
             numeric.UIntValue = 4000000000
             numeric.ULongValue = 7
             numeric.Letter = 'A'
+            local keyword = CS.LuaLoom.UnitTests.Sample.KeywordSurface()
+            keyword.class = 5
+            keyword.value = 6
+            local baseValue = keyword:base(7)
+            local emitter = CS.LuaLoom.UnitTests.Sample.Emitter()
+            local emitCount = 0
+            local emitFn = function(value) emitCount = emitCount + 1 end
+            emitter:Changed('+', emitFn)
+            emitter:Changed('+', emitFn)
+            emitter:Raise(1)
             return numeric.ByteValue, numeric.SByteValue, numeric.ShortValue, numeric.UShortValue,
                    numeric.UIntValue, numeric.ULongValue, numeric.Letter,
                    CS.LuaLoom.UnitTests.Sample.DefaultSurface.WithNewline(),
@@ -959,7 +971,8 @@ public sealed class CodeGenTests
                    CS.LuaLoom.UnitTests.Sample.DefaultSurface.WithNaN(),
                    CS.LuaLoom.UnitTests.Sample.Overloads.Pick(1),
                    CS.LuaLoom.UnitTests.Sample.Overloads.Pick(4000000000),
-                   CS.LuaLoom.UnitTests.Sample.PartialSurface.Stable(5)
+                   CS.LuaLoom.UnitTests.Sample.PartialSurface.Stable(5),
+                   keyword.class, keyword.value, baseValue, emitCount
             """);
 
         Assert.Equal(7L, results[0]);
@@ -975,6 +988,19 @@ public sealed class CodeGenTests
         Assert.Equal("int", results[10]);
         Assert.Equal("long", results[11]);
         Assert.Equal(5L, results[12]);
+        Assert.Equal(5L, results[13]);
+        Assert.Equal(6L, results[14]);
+        Assert.Equal(8L, results[15]);
+        Assert.Equal(1L, results[16]);
+
+        using var collisionTable = (LuaTable)env.DoString("""
+            local impl = {}
+            function impl:Calc(a, b, c, d) return a + b + c + d end
+            return impl
+            """)[0]!;
+
+        var collision = collisionTable.Cast<INamingCollision>();
+        Assert.Equal(10, collision.Calc(1, 2, 3, 4));
 
         using var table = (LuaTable)env.DoString("""
             local impl = { value = 0 }

@@ -126,6 +126,60 @@ public sealed class MarshalTests : IDisposable
     }
 
     [Fact]
+    public void BoolReader_UsesLuaTruthiness()
+    {
+        using var guard = LuaStackGuard.Enter(_state);
+        _marshal.Push(1);
+        Assert.True(_marshal.Read<bool>(-1));
+
+        LuaApi.lua_settop(_state, LuaApi.lua_gettop(_state) - 1);
+        LuaApi.lua_pushnil(_state);
+        Assert.False(_marshal.Read<bool>(-1));
+
+        LuaApi.lua_settop(_state, LuaApi.lua_gettop(_state) - 1);
+        _marshal.Push(string.Empty);
+        Assert.True(_marshal.Read<bool>(-1));
+    }
+
+    [Fact]
+    public void IntegerReader_ReportsOverflowAsConversionError()
+    {
+        using var guard = LuaStackGuard.Enter(_state);
+        _marshal.Push(4000000000L);
+
+        Assert.Throws<LuaConversionException>(() => _marshal.Read<int>(-1));
+        Assert.Throws<LuaConversionException>(() => LuaBinding.ReadInt(_state, -1));
+    }
+
+    [Fact]
+    public void FloatReader_RejectsOutOfRangeValue()
+    {
+        using var guard = LuaStackGuard.Enter(_state);
+        _marshal.Push(1e300);
+
+        Assert.Throws<LuaConversionException>(() => _marshal.Read<float>(-1));
+        Assert.Throws<LuaConversionException>(() => LuaBinding.ReadFloat(_state, -1));
+    }
+
+    [Fact]
+    public void StringReader_ConvertsNumbersAndAcceptsNil()
+    {
+        using var guard = LuaStackGuard.Enter(_state);
+        LuaApi.lua_pushnil(_state);
+        Assert.Null(_marshal.Read<string>(-1));
+
+        LuaApi.lua_settop(_state, LuaApi.lua_gettop(_state) - 1);
+        _marshal.Push(42);
+        Assert.Equal("42", _marshal.Read<string>(-1));
+        Assert.Equal("42", LuaBinding.ReadString(_state, -1));
+
+        LuaApi.lua_settop(_state, LuaApi.lua_gettop(_state) - 1);
+        _marshal.Push(true);
+        Assert.Throws<LuaConversionException>(() => _marshal.Read<string>(-1));
+        Assert.Throws<LuaConversionException>(() => LuaBinding.ReadString(_state, -1));
+    }
+
+    [Fact]
     public void TypeMismatch_ThrowsConversionException()
     {
         using var guard = LuaStackGuard.Enter(_state);
