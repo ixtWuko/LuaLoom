@@ -191,7 +191,7 @@ id 的复用交给 `luaL_ref` 自带的空闲链，不再维护第二套。
 3. struct 读写不走托管对象：`RuntimeHelpers.IsReferenceOrContainsReferences<T>()` 判定失败直接抛 `NotSupportedException`；通过后按 `Unsafe.SizeOf<T>()` 分配 userdata，用 `Unsafe.Write/Read` 整块拷贝。
 4. 对象身份：id → userdata 存在弱值表里，C# 侧不持引用；userdata 被回收时 `__gc` 回调把 id 从身份表里移除，允许 id 复用。若对象仍被 C# 持有，下次 push 会重建 userdata。
 5. 句柄释放：`Dispose` 立即 `luaL_unref`（C API 允许在回调内调用，不需要延迟）；只有终结器无法在 GC 线程调 Lua，才把 id 入队，由 `Tick()` 在宿主线程释放。
-6. 自定义类型：`RegisterMarshaler(ITypeMarshaler)` 追加到列表尾部，查找时从后往前，后注册者优先。
+6. 自定义类型：`RegisterMarshaler(ITypeMarshaler)` 追加到列表尾部，查找时从后往前，后注册者优先；`Push<T>` 与 `Read<T>`/`Read(Type)` 都会先查自定义 marshaler。
 
 **复杂度**：标量 push/read O(1)；struct 按整块拷贝 O(1)（大小固定）；对象身份查找 O(1) 均摊；弱值表的大小随活跃对象数增长。
 

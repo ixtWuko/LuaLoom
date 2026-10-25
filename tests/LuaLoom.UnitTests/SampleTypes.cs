@@ -115,6 +115,8 @@ public interface IGenericCalculator
 
 public delegate int IntUnary(int value);
 
+public delegate void VoidOp(int value);
+
 public interface IEventSource
 {
     event IntUnary? Changed;
@@ -122,14 +124,180 @@ public interface IEventSource
 
 public sealed class DelegateFactory
 {
+    public static int LastValue;
+
+    public static VoidOp MakeVoid() => value => LastValue = value;
+
     public static IntUnary Make(int factor) => value => value * factor;
+
+    public static IntOp MakeBinary(int factor) => (left, right) => (left + right) * factor;
+
+    public static ParseOp MakeParser() => static (string text, out int value) =>
+        int.TryParse(text, out value);
+
+    public static ParamsOp MakeParams() => static (seed, values) =>
+    {
+        var total = seed;
+        foreach (var value in values)
+        {
+            total += value;
+        }
+
+        return total;
+    };
+
+    public static ArrayOp MakeArray(int factor) => values =>
+    {
+        var result = new int[values.Length];
+        for (var i = 0; i < values.Length; i++)
+        {
+            result[i] = values[i] * factor;
+        }
+
+        return result;
+    };
 }
 
 public static class InteropHost
 {
     public static int Use(IGenericCalculator calculator) => calculator.Echo(5);
 
+    public static int UseCalculator(ICalculator calculator) => calculator.Add(2, 3);
+
     public static void Subscribe(IEventSource source, IntUnary handler) => source.Changed += handler;
+
+    public static void Unsubscribe(IEventSource source, IntUnary handler) => source.Changed -= handler;
+
+    public static string UseAdvanced(IAdvancedCalculator calculator) =>
+        calculator.Pair(1, "x") + ":" + calculator.Sum([1, 2, 3]);
+
+    public static string UseArrayCalculator(IArrayCalculator calculator) =>
+        calculator.Sum([1, 2, 3]) + ":"
+        + calculator.Join("-", 1, 2, 3) + ":"
+        + calculator.TryParse("4", out var value) + ":"
+        + value;
+
+    public static bool UseAdvancedOut(IAdvancedCalculator calculator) =>
+        calculator.TryParse("42", out var value) && value == 42;
+
+    public static int UseAdvancedProperty(IAdvancedCalculator calculator)
+    {
+        calculator.Value = 7;
+        return calculator.Value;
+    }
+
+    public static string UseConstrained(IConstrainedCalculator calculator) => calculator.Name("x");
+}
+
+public interface IAdvancedCalculator
+{
+    T Echo<T>(T value);
+
+    string Pair<T1, T2>(T1 first, T2 second);
+
+    int Sum(int[] values);
+
+    bool TryParse(string text, out int value);
+
+    int Value { get; set; }
+}
+
+public interface IConstrainedCalculator
+{
+    string Name<T>(T value) where T : class;
+}
+
+public sealed class CastProbe
+{
+    public int Number;
+
+    public string Name { get; set; } = string.Empty;
+
+    public Player? Child { get; set; }
+
+    public int[] Numbers { get; set; } = [];
+
+    public Vec2 Position;
+
+    public int ReadOnly => 9;
+
+    public List<int> Items { get; set; } = [];
+}
+
+public sealed class NoDefaultCtor
+{
+    public NoDefaultCtor(int value) => Value = value;
+
+    public int Value { get; }
+}
+
+public static class AdvancedGenerics
+{
+    public static T Echo<T>(T value) => value;
+
+    public static string Pair<T1, T2>(T1 first, T2 second) =>
+        typeof(T1).Name + ":" + typeof(T2).Name + ":" + first + ":" + second;
+
+    public static bool TryGeneric<T>(T value, out int number)
+    {
+        number = value is int intValue ? intValue + 1 : 0;
+        return true;
+    }
+
+    public static int SumGeneric<T>(params int[] values)
+    {
+        var total = 0;
+        foreach (var value in values)
+        {
+            total += value;
+        }
+
+        return total;
+    }
+}
+
+public sealed class GenericInstance
+{
+    public T Echo<T>(T value) => value;
+
+    public string Pair<T1, T2>(T1 first, T2 second) =>
+        typeof(T1).Name + ":" + typeof(T2).Name;
+}
+
+public enum SampleColor
+{
+    Red = 1,
+    Blue = 2,
+}
+
+public static class ArraySurface
+{
+    public static int SumLengths(string[] values)
+    {
+        var total = 0;
+        foreach (var value in values)
+        {
+            total += value.Length;
+        }
+
+        return total;
+    }
+
+    public static Player[] EchoPlayers(Player[] values) => values;
+
+    public static int[,] EchoMatrix(int[,] values) => values;
+
+    public static int[,,] EchoCube(int[,,] values) => values;
+
+    public static SampleColor[] EchoColors(SampleColor[] values) => values;
+
+    public static object[] EchoObjects(object[] values) => values;
+
+    public static int[] Empty() => [];
+
+    public static int[]? NullArray() => null;
+
+    public static int SumNullable(int[]? values) => values is null ? -1 : values.Sum();
 }
 
 public delegate int IntOp(int a, int b);
@@ -173,6 +341,41 @@ public sealed class Money
     public override bool Equals(object? obj) => obj is Money other && this == other;
 
     public override int GetHashCode() => Amount;
+}
+
+public sealed class MathValue
+{
+    public MathValue(int value) => Value = value;
+
+    public int Value;
+
+    public static MathValue operator +(MathValue left, MathValue right) => new(left.Value + right.Value);
+
+    public static MathValue operator -(MathValue left, MathValue right) => new(left.Value - right.Value);
+
+    public static MathValue operator *(MathValue left, MathValue right) => new(left.Value * right.Value);
+
+    public static MathValue operator /(MathValue left, MathValue right) => new(left.Value / right.Value);
+
+    public static MathValue operator %(MathValue left, MathValue right) => new(left.Value % right.Value);
+
+    public static MathValue operator -(MathValue value) => new(-value.Value);
+
+    public static bool operator ==(MathValue left, MathValue right) => left.Value == right.Value;
+
+    public static bool operator !=(MathValue left, MathValue right) => left.Value != right.Value;
+
+    public static bool operator <(MathValue left, MathValue right) => left.Value < right.Value;
+
+    public static bool operator <=(MathValue left, MathValue right) => left.Value <= right.Value;
+
+    public static bool operator >(MathValue left, MathValue right) => left.Value > right.Value;
+
+    public static bool operator >=(MathValue left, MathValue right) => left.Value >= right.Value;
+
+    public override bool Equals(object? obj) => obj is MathValue other && this == other;
+
+    public override int GetHashCode() => Value;
 }
 
 public sealed class Bag

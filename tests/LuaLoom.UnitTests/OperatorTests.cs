@@ -64,6 +64,24 @@ public sealed class OperatorTests
     }
 
     [Fact]
+    public void MultiplicationDivisionModuloAndLessOrEqual_InvokeOperators()
+    {
+        using var env = new LuaEnv();
+
+        var result = env.DoString("""
+            local a = CS.LuaLoom.UnitTests.Sample.MathValue(7)
+            local b = CS.LuaLoom.UnitTests.Sample.MathValue(2)
+            return (a * b).Value, (a / b).Value, (a % b).Value, a <= b, a <= a
+            """);
+
+        Assert.Equal(14L, result[0]);
+        Assert.Equal(3L, result[1]);
+        Assert.Equal(1L, result[2]);
+        Assert.Equal(false, result[3]);
+        Assert.Equal(true, result[4]);
+    }
+
+    [Fact]
     public void Indexer_ReadsAndWrites()
     {
         using var env = new LuaEnv();

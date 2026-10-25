@@ -308,6 +308,11 @@ internal sealed class LuaMarshal : IDisposable
     public T Read<T>(int index)
     {
         var type = typeof(T);
+        var custom = FindCustomMarshaler(type);
+        if (custom is not null)
+        {
+            return (T)custom.Read(_state, index, type)!;
+        }
 
         if (type == typeof(object))
         {
@@ -462,6 +467,12 @@ internal sealed class LuaMarshal : IDisposable
 
     public object? Read(Type type, int index)
     {
+        var custom = FindCustomMarshaler(type);
+        if (custom is not null)
+        {
+            return custom.Read(_state, index, type);
+        }
+
         if (type == typeof(object))
         {
             return ReadObject(index);

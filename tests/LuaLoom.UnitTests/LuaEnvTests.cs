@@ -213,11 +213,58 @@ public sealed class LuaEnvTests
     }
 
     [Fact]
+    public void CheckThreadAffinityDisabled_AllowsWorkerThreadCall()
+    {
+        using var env = new LuaEnv(new LuaEnvOptions { CheckThreadAffinity = false });
+        Exception? captured = null;
+
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                env.DoString("return 1");
+            }
+            catch (Exception exception)
+            {
+                captured = exception;
+            }
+        });
+        thread.Start();
+        thread.Join();
+
+        Assert.Null(captured);
+    }
+
+    [Fact]
     public void MemoryBytes_IsPositive()
     {
         using var env = new LuaEnv();
 
         Assert.True(env.MemoryBytes > 0);
+    }
+
+    [Fact]
+    public void CollectGarbage_AllModes_AreAccepted()
+    {
+        using var env = new LuaEnv();
+        env.DoString("local t = {}; for i = 1, 100 do t[i] = i end");
+
+        foreach (var mode in Enum.GetValues<GcMode>())
+        {
+            env.CollectGarbage(mode);
+        }
+    }
+
+    [Fact]
+    public void GcParameters_AfterDispose_Throw()
+    {
+        var env = new LuaEnv();
+        env.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => _ = env.GcPause);
+        Assert.Throws<ObjectDisposedException>(() => env.GcPause = 100);
+        Assert.Throws<ObjectDisposedException>(() => _ = env.GcStepMultiplier);
+        Assert.Throws<ObjectDisposedException>(() => env.GcStepMultiplier = 100);
     }
 
     [Fact]

@@ -166,7 +166,7 @@ public static class CodeGenerator
             if (CanGenerateCast(type))
             {
                 registrations.Add(
-                    $"        env.RegisterCast(typeof({TypeRef(type)}), global::{config.Namespace}.{binder}.Cast);");
+                    $"        env.RegisterCast(typeof({TypeRef(type)}), static table => global::{config.Namespace}.{binder}.Cast(table));");
             }
 
             if (IsExtensionClass(type))
@@ -1167,11 +1167,19 @@ public static class CodeGenerator
         GeneratorConfig config,
         bool includeBase)
     {
-        var properties = SupportedProperties(type, BindingFlags.Instance, includeBase: includeBase)
+        var properties = SupportedProperties(
+                type,
+                BindingFlags.Instance,
+                includeBase: includeBase,
+                allowCollections: true)
             .Where(static p => p.SetMethod is { IsPublic: true })
             .Where(p => !IsMemberDenied(config, type, p.Name))
             .ToList();
-        var fields = SupportedFields(type, BindingFlags.Instance, includeBase: includeBase)
+        var fields = SupportedFields(
+                type,
+                BindingFlags.Instance,
+                includeBase: includeBase,
+                allowCollections: true)
             .Where(static f => !f.IsInitOnly)
             .Where(f => !IsMemberDenied(config, type, f.Name))
             .ToList();
@@ -2504,7 +2512,8 @@ public static class CodeGenerator
         Type type,
         BindingFlags flags,
         bool forBinding = true,
-        bool includeBase = true)
+        bool includeBase = true,
+        bool allowCollections = false)
     {
         var all = BindingFlags.Public | (includeBase ? BindingFlags.FlattenHierarchy : BindingFlags.DeclaredOnly);
         var properties = type.GetProperties(flags | all)
@@ -2513,7 +2522,9 @@ public static class CodeGenerator
                 || (!IsObsolete(p)
                     && !IsObsolete(p.GetMethod)
                     && (p.SetMethod is null || !IsObsolete(p.SetMethod))))
-            .Where(static p => IsSupportedParameter(p.PropertyType));
+            .Where(p => allowCollections
+                ? IsCastMemberType(p.PropertyType)
+                : IsSupportedParameter(p.PropertyType));
 
         if (includeBase)
         {
@@ -2628,12 +2639,15 @@ public static class CodeGenerator
     private static List<FieldInfo> SupportedFields(
         Type type,
         BindingFlags flags,
-        bool includeBase = true)
+        bool includeBase = true,
+        bool allowCollections = false)
     {
         var all = BindingFlags.Public | (includeBase ? BindingFlags.FlattenHierarchy : BindingFlags.DeclaredOnly);
         var fields = type.GetFields(flags | all)
             .Where(static f => !IsObsolete(f))
-            .Where(static f => IsSupportedParameter(f.FieldType));
+            .Where(f => allowCollections
+                ? IsCastMemberType(f.FieldType)
+                : IsSupportedParameter(f.FieldType));
 
         if (includeBase)
         {
@@ -2857,6 +2871,21 @@ public static class CodeGenerator
 
     private static bool IsSupportedArrayElement(Type type) =>
         type.IsGenericParameter || IsSupportedParameter(type);
+
+    private static bool IsCastMemberType(Type type)
+    {
+        if (type.IsGenericType && !type.IsGenericTypeDefinition)
+        {
+            var definition = type.GetGenericTypeDefinition().FullName;
+            if (definition is "System.Collections.Generic.List`1"
+                or "System.Collections.Generic.Dictionary`2")
+            {
+                return true;
+            }
+        }
+
+        return IsSupportedParameter(type);
+    }
 
     private static string HandlerBase(string name, bool isStatic) =>
         $"{(isStatic ? "Static" : "Instance")}_{name}";

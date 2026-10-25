@@ -708,7 +708,7 @@ internal static class Interop
         }
 
         var values = ReadArguments(environment, s, 2, LuaApi.lua_gettop(s));
-        var method = callback.Method;
+        var method = callback.GetType().GetMethod("Invoke") ?? callback.Method;
         if (!TryBindArguments(values, method.GetParameters(), out var arguments, out _))
         {
             throw new ArgumentException(
@@ -760,10 +760,20 @@ internal static class Interop
         }
 
         if (environment.TryGetTypeBinding(left.GetType(), out var operatorBinding)
-            && operatorBinding.Operators is { } operators
-            && operators.TryGetValue(methodName, out var generated))
+            && operatorBinding.Operators is { } operators)
         {
-            return generated(s);
+            if (operators.TryGetValue(methodName, out var generated))
+            {
+                return generated(s);
+            }
+
+            var luaName = Operators
+                .FirstOrDefault(entry => entry.MethodName == methodName)
+                .LuaName;
+            if (luaName is not null && operators.TryGetValue(luaName, out generated))
+            {
+                return generated(s);
+            }
         }
 
         ThrowStrict(environment, left.GetType(), $"operator '{methodName}'");

@@ -160,7 +160,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 一维/矩形数组参数/返回值（含类元素、字符串、枚举、`object`） | 交错数组的运行时特殊形状、非零下界数组 |
 | `decimal` 参数/返回值（生成与反射路径） | 非 decimal 的通用 struct 零 GC pack/unpack |
 | `gcOptimize` 声明的值类型（blittable 自动零 GC） | 非 blittable struct 仍走装箱/反射 |
-| 配置类型的 `Cast<T>`（`RegisterCast`） | 无无参构造的类、接口、集合/字典的生成式转换 |
+| 配置类型的 `Cast<T>`（`RegisterCast`，含嵌套 class/struct、`List`/`Dictionary` 属性） | 无无参构造的类、接口、顶层集合/字典的生成式转换 |
 | `BlackList`/`DoNotGen` 类型或成员、`ReflectionUse`、`--coverage` 报告 | 按签名精确排除重载（当前按成员名排除整组） |
 
 同一参数个数的多个重载取声明顺序第一个；多类型重载的精确解析留给运行时反射路径。生成器跳过的成员不会丢失，由 [M004](M004-interop-bridge.md) 的回落路径接管。

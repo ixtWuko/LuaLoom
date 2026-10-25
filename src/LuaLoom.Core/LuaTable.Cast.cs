@@ -57,6 +57,14 @@ public sealed partial class LuaTable
             return factory(this);
         }
 
+        if (environment.Options.StrictReflection || !environment.Options.EnableReflectionFallback)
+        {
+            var reason = environment.Options.StrictReflection
+                ? "Strict reflection mode blocked interface proxy"
+                : "Interface proxy is disabled by EnableReflectionFallback";
+            throw new InvalidOperationException($"{reason} for '{type.FullName}'.");
+        }
+
         var proxy = DispatchProxy.Create(type, typeof(LuaInterfaceProxy));
         ((LuaInterfaceProxy)proxy).Initialize(this);
         return proxy;

@@ -161,6 +161,16 @@ public sealed class InteropTests
     }
 
     [Fact]
+    public void CastInterface_WithReflectionFallbackDisabled_Throws()
+    {
+        using var env = new LuaEnv(new LuaEnvOptions { EnableReflectionFallback = false });
+        using var table = (LuaTable)env.DoString("return { Add = function(self, a, b) return a + b end }")[0]!;
+
+        var exception = Assert.Throws<InvalidOperationException>(() => table.Cast<ICalculator>());
+        Assert.Contains("Interface proxy", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RegisteredInterfaceFactory_TakesPrecedence()
     {
         using var env = new LuaEnv();

@@ -8,7 +8,7 @@ public static class LuaBindings
     public static void Register(global::LuaLoom.LuaEnv env)
     {
         env.RegisterType(global::LuaLoom.Sample.Generated.LuaLoom_Sample_PlayerBinder.Create());
-        env.RegisterCast(typeof(global::LuaLoom.Sample.Player), global::LuaLoom.Sample.Generated.LuaLoom_Sample_PlayerBinder.Cast);
+        env.RegisterCast(typeof(global::LuaLoom.Sample.Player), static table => global::LuaLoom.Sample.Generated.LuaLoom_Sample_PlayerBinder.Cast(table));
         env.RegisterDelegate(typeof(global::LuaLoom.Sample.IntCallback), new global::LuaLoom.Sample.Generated.LuaLoom_Sample_IntCallbackInvoker());
     }
 }

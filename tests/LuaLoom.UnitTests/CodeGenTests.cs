@@ -34,10 +34,23 @@ public sealed class CodeGenTests
             "LuaLoom.UnitTests.Sample.DelegateFactory",
             "LuaLoom.UnitTests.Sample.InteropHost",
             "LuaLoom.UnitTests.Sample.UnsupportedSurface",
+            "LuaLoom.UnitTests.Sample.CastProbe",
+            "LuaLoom.UnitTests.Sample.NoDefaultCtor",
+            "LuaLoom.UnitTests.Sample.AdvancedGenerics",
+            "LuaLoom.UnitTests.Sample.GenericInstance",
+            "LuaLoom.UnitTests.Sample.ArraySurface",
+            "LuaLoom.UnitTests.Sample.MathValue",
+            "LuaLoom.UnitTests.Sample.Vec2",
         ],
         GenericMethods =
         [
             "LuaLoom.UnitTests.Sample.Generics.Describe<int>",
+            "LuaLoom.UnitTests.Sample.AdvancedGenerics.Echo<int>",
+            "LuaLoom.UnitTests.Sample.AdvancedGenerics.Pair<int,string>",
+            "LuaLoom.UnitTests.Sample.AdvancedGenerics.TryGeneric<int>",
+            "LuaLoom.UnitTests.Sample.AdvancedGenerics.SumGeneric<int>",
+            "LuaLoom.UnitTests.Sample.GenericInstance.Echo<string>",
+            "LuaLoom.UnitTests.Sample.GenericInstance.Pair<int,string>",
         ],
         CSharpCallLua =
         [
@@ -45,8 +58,11 @@ public sealed class CodeGenTests
             "LuaLoom.UnitTests.Sample.ICalculator",
             "LuaLoom.UnitTests.Sample.IArrayCalculator",
             "LuaLoom.UnitTests.Sample.IGenericCalculator",
+            "LuaLoom.UnitTests.Sample.IAdvancedCalculator",
+            "LuaLoom.UnitTests.Sample.IConstrainedCalculator",
             "LuaLoom.UnitTests.Sample.IEventSource",
             "LuaLoom.UnitTests.Sample.IntUnary",
+            "LuaLoom.UnitTests.Sample.VoidOp",
             "LuaLoom.UnitTests.Sample.ParseOp",
             "LuaLoom.UnitTests.Sample.ParamsOp",
             "LuaLoom.UnitTests.Sample.ArrayOp",
@@ -103,6 +119,7 @@ public sealed class CodeGenTests
         Assert.Contains("LuaLoom_UnitTests_Sample_IArrayCalculatorImpl.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_IGenericCalculatorImpl.g.cs", names);
         Assert.Contains("LuaLoom_UnitTests_Sample_IEventSourceImpl.g.cs", names);
+        Assert.DoesNotContain("LuaLoom_UnitTests_Sample_IConstrainedCalculatorImpl.g.cs", names);
         Assert.Contains("System_Action_int_Invoker.g.cs", names);
         Assert.Contains(
             names,
@@ -370,14 +387,22 @@ public sealed class CodeGenTests
 
         var results = env.DoString("""
             local p = CS.LuaLoom.UnitTests.Sample.Player(3)
+            local emptyPlayer = CS.LuaLoom.UnitTests.Sample.Player()
             p.Hp = 4
             p.Name = 'strict'
+            CS.LuaLoom.UnitTests.Sample.Player.Count = 11
+            local playerCount = CS.LuaLoom.UnitTests.Sample.Player.Count
             local c = CS.LuaLoom.UnitTests.Sample.ComplexOverloads()
             local outValue, outExtra = c:OutGroup(2)
             local f = CS.LuaLoom.UnitTests.Sample.DelegateFactory.Make(3)
             local generic = { Echo = function(self, value) return value + 1 end }
-            local events = { add_Changed = function(self, handler) self.seen = handler(7) end }
-            CS.LuaLoom.UnitTests.Sample.InteropHost.Subscribe(events, function(value) return value * 2 end)
+            local events = {
+                add_Changed = function(self, handler) self.seen = handler(7) end,
+                remove_Changed = function(self, handler) self.removed = handler(3) end
+            }
+            local eventHandler = function(value) return value * 2 end
+            CS.LuaLoom.UnitTests.Sample.InteropHost.Subscribe(events, eventHandler)
+            CS.LuaLoom.UnitTests.Sample.InteropHost.Unsubscribe(events, eventHandler)
             local players = { CS.LuaLoom.UnitTests.Sample.Player(2), CS.LuaLoom.UnitTests.Sample.Player(3) }
             local made = CS.LuaLoom.UnitTests.Sample.ArrayMethods.MakePlayers(5)
             local describe = lua_loom_generic(
@@ -388,6 +413,25 @@ public sealed class CodeGenTests
             local f3 = CS.LuaLoom.UnitTests.Sample.DelegateFactory.Make(3)
             local combined = f2 + f3
             local removed = combined - f3
+            local emitter = CS.LuaLoom.UnitTests.Sample.Emitter()
+            local seen = 0
+            local onChanged = function(value) seen = value end
+            emitter:Changed('+', onChanged)
+            emitter:Raise(5)
+            emitter:Changed('-', onChanged)
+            emitter:Raise(7)
+            local bag = CS.LuaLoom.UnitTests.Sample.Bag()
+            bag[1] = 5
+            local money = CS.LuaLoom.UnitTests.Sample.Money(2) + CS.LuaLoom.UnitTests.Sample.Money(3)
+            local multiplied = CS.LuaLoom.UnitTests.Sample.MathValue(6) * CS.LuaLoom.UnitTests.Sample.MathValue(2)
+            local divided = CS.LuaLoom.UnitTests.Sample.MathValue(6) / CS.LuaLoom.UnitTests.Sample.MathValue(2)
+            local remainder = CS.LuaLoom.UnitTests.Sample.MathValue(6) % CS.LuaLoom.UnitTests.Sample.MathValue(2)
+            local lessOrEqual = CS.LuaLoom.UnitTests.Sample.MathValue(2) <= CS.LuaLoom.UnitTests.Sample.MathValue(6)
+            local pickString = CS.LuaLoom.UnitTests.Sample.Overloads.Pick('x')
+            local pickInteger = CS.LuaLoom.UnitTests.Sample.Overloads.Pick(1)
+            local pickNumber = CS.LuaLoom.UnitTests.Sample.Overloads.Pick(1.5)
+            local optionalDefault = CS.LuaLoom.UnitTests.Sample.Overloads.Optional()
+            local optionalValue = CS.LuaLoom.UnitTests.Sample.Overloads.Optional(4)
             return p.Hp, p.Name, p:Add(2, 3), p:Add(5),
                    CS.LuaLoom.UnitTests.Sample.Player.Double(6),
                    c:Combo(1), c:Combo(1, 2), c:Combo(1, 'x'),
@@ -396,7 +440,12 @@ public sealed class CodeGenTests
                    CS.LuaLoom.UnitTests.Sample.ArrayMethods.SumPlayers(players),
                    #made, made[2].Hp, describe(5),
                    CS.LuaLoom.UnitTests.Sample.ArrayMethods.SumMatrix(matrix),
-                   madeMatrix[2][2], combined(4), removed(4)
+                   madeMatrix[2][2], combined(4), removed(4),
+                   p:Triple(2), seen, bag[1], money.Amount, events.removed,
+                   c:Combo(1, 2, 3),
+                   multiplied.Value, divided.Value, remainder.Value, lessOrEqual,
+                   pickString, pickInteger, pickNumber, optionalDefault, optionalValue,
+                   playerCount, emptyPlayer.Hp
             """);
 
         Assert.Equal(4L, results[0]);
@@ -421,11 +470,187 @@ public sealed class CodeGenTests
         Assert.Equal(5L, results[19]);
         Assert.Equal(12L, results[20]);
         Assert.Equal(8L, results[21]);
+        Assert.Equal(8L, results[22]);
+        Assert.Equal(5L, results[23]);
+        Assert.Equal(5L, results[24]);
+        Assert.Equal(5L, results[25]);
+        Assert.Equal(6L, results[26]);
+        Assert.Equal("params", results[27]);
+        Assert.Equal(12L, results[28]);
+        Assert.Equal(3L, results[29]);
+        Assert.Equal(0L, results[30]);
+        Assert.Equal(true, results[31]);
+        Assert.Equal("string", results[32]);
+        Assert.Equal("long", results[33]);
+        Assert.Equal("object", results[34]);
+        Assert.Equal(7L, results[35]);
+        Assert.Equal(4L, results[36]);
+        Assert.Equal(11L, results[37]);
+        Assert.Equal(0L, results[38]);
 
         using var castTable = (LuaTable)env.DoString("return { Hp = 8, Name = 'cast' }")[0]!;
         var castPlayer = castTable.Cast<Player>();
         Assert.Equal(8, castPlayer.Hp);
         Assert.Equal("cast", castPlayer.Name);
+    }
+
+    [Fact]
+    public void GeneratedBindings_AdvancedFeatures()
+    {
+        var result = CodeGenerator.Generate(CreateConfig(typeof(Player).Assembly.Location), AppContext.BaseDirectory);
+        Assert.Empty(result.Diagnostics);
+
+        var compilation = CreateCompilation(result, "LuaLoom.Generated.Advanced.Tests");
+        using var stream = new MemoryStream();
+        var emit = compilation.Emit(stream);
+        Assert.True(
+            emit.Success,
+            string.Join(Environment.NewLine, emit.Diagnostics.Where(static d => d.Severity == DiagnosticSeverity.Error)));
+
+        stream.Position = 0;
+        var assembly = AssemblyLoadContext.Default.LoadFromStream(stream);
+        var register = assembly
+            .GetType("LuaLoom.Generated.LuaBindings", throwOnError: true)!
+            .GetMethod("Register", BindingFlags.Public | BindingFlags.Static)
+            ?? throw new InvalidOperationException("LuaBindings.Register was not generated.");
+
+        using var env = new LuaEnv(new LuaEnvOptions { StrictReflection = true });
+        register.Invoke(null, [env]);
+
+        var results = env.DoString("""
+            local advanced = {
+                Echo = function(self, value) return value end,
+                Pair = function(self, left, right) return tostring(left) .. ':' .. tostring(right) end,
+                Sum = function(self, values)
+                    local total = 0
+                    for i = 1, #values do total = total + values[i] end
+                    return total
+                end,
+                TryParse = function(self, text) return true, tonumber(text) end,
+                get_Value = function(self) return self.value or 0 end,
+                set_Value = function(self, value) self.value = value end
+            }
+            local advancedText = CS.LuaLoom.UnitTests.Sample.InteropHost.UseAdvanced(advanced)
+            local advancedOut = CS.LuaLoom.UnitTests.Sample.InteropHost.UseAdvancedOut(advanced)
+            local advancedProperty = CS.LuaLoom.UnitTests.Sample.InteropHost.UseAdvancedProperty(advanced)
+            local arrayCalculator = {
+                Sum = function(self, values)
+                    local total = 0
+                    for i = 1, #values do total = total + values[i] end
+                    return total
+                end,
+                Join = function(self, separator, ...)
+                    return table.concat({ ... }, separator)
+                end,
+                TryParse = function(self, text) return true, tonumber(text) end
+            }
+            local arrayText = CS.LuaLoom.UnitTests.Sample.InteropHost.UseArrayCalculator(arrayCalculator)
+
+            local pair = lua_loom_generic(
+                'LuaLoom.UnitTests.Sample.AdvancedGenerics', 'Pair', 'System.Int32', 'System.String')
+            local tryGeneric = lua_loom_generic(
+                'LuaLoom.UnitTests.Sample.AdvancedGenerics', 'TryGeneric', 'System.Int32')
+            local sumGeneric = lua_loom_generic(
+                'LuaLoom.UnitTests.Sample.AdvancedGenerics', 'SumGeneric', 'System.Int32')
+            local genericInstance = CS.LuaLoom.UnitTests.Sample.GenericInstance()
+            local echo = lua_loom_generic(
+                CS.LuaLoom.UnitTests.Sample.GenericInstance, 'Echo', 'System.String')
+            local pairInstance = lua_loom_generic(
+                CS.LuaLoom.UnitTests.Sample.GenericInstance, 'Pair', 'System.Int32', 'System.String')
+
+            local strings = CS.LuaLoom.UnitTests.Sample.ArraySurface.SumLengths({ 'ab', 'c' })
+            local players = { CS.LuaLoom.UnitTests.Sample.Player(5), CS.LuaLoom.UnitTests.Sample.Player(6) }
+            local echoedPlayers = CS.LuaLoom.UnitTests.Sample.ArraySurface.EchoPlayers(players)
+            local colors = CS.LuaLoom.UnitTests.Sample.ArraySurface.EchoColors({ 1, 2 })
+            local matrix = CS.LuaLoom.UnitTests.Sample.ArraySurface.EchoMatrix({ { 1, 2 }, { 3, 4 } })
+            local cube = CS.LuaLoom.UnitTests.Sample.ArraySurface.EchoCube(
+                { { { 1, 2 }, { 3, 4 } }, { { 5, 6 }, { 7, 8 } } })
+            local empty = CS.LuaLoom.UnitTests.Sample.ArraySurface.Empty()
+            local nullArray = CS.LuaLoom.UnitTests.Sample.ArraySurface.NullArray()
+            local nullSum = CS.LuaLoom.UnitTests.Sample.ArraySurface.SumNullable(nil)
+
+            local genericOk, genericNumber = tryGeneric(5)
+            local genericSum = sumGeneric(1, 2, 3)
+            return advancedText, advancedOut, advancedProperty,
+                   pair(1, 'x'), echo(genericInstance, 'hi'),
+                   strings, echoedPlayers[2].Hp, colors[1], colors[2],
+                   matrix[2][2], cube[2][2][2], #empty, nullArray == nil,
+                   genericOk, genericNumber, genericSum,
+                   pairInstance(genericInstance, 1, 'x'), nullSum, arrayText
+            """);
+
+        Assert.Equal("1:x:6", results[0]);
+        Assert.Equal(true, results[1]);
+        Assert.Equal(7L, results[2]);
+        Assert.Equal("Int32:String:1:x", results[3]);
+        Assert.Equal("hi", results[4]);
+        Assert.Equal(3L, results[5]);
+        Assert.Equal(6L, results[6]);
+        Assert.Equal(1L, results[7]);
+        Assert.Equal(2L, results[8]);
+        Assert.Equal(4L, results[9]);
+        Assert.Equal(8L, results[10]);
+        Assert.Equal(0L, results[11]);
+        Assert.Equal(true, results[12]);
+        Assert.Equal(true, results[13]);
+        Assert.Equal(6L, results[14]);
+        Assert.Equal(6L, results[15]);
+        Assert.Equal("Int32:String", results[16]);
+        Assert.Equal(-1L, results[17]);
+        Assert.Equal("6:1-2-3:True:4", results[18]);
+    }
+
+    [Fact]
+    public void GeneratedCast_HandlesNestedAndCollectionMembers()
+    {
+        var result = CodeGenerator.Generate(CreateConfig(typeof(Player).Assembly.Location), AppContext.BaseDirectory);
+        Assert.Empty(result.Diagnostics);
+
+        var compilation = CreateCompilation(result, "LuaLoom.Generated.Cast.Tests");
+        using var stream = new MemoryStream();
+        var emit = compilation.Emit(stream);
+        Assert.True(
+            emit.Success,
+            string.Join(Environment.NewLine, emit.Diagnostics.Where(static d => d.Severity == DiagnosticSeverity.Error)));
+
+        stream.Position = 0;
+        var assembly = AssemblyLoadContext.Default.LoadFromStream(stream);
+        var register = assembly
+            .GetType("LuaLoom.Generated.LuaBindings", throwOnError: true)!
+            .GetMethod("Register", BindingFlags.Public | BindingFlags.Static)!;
+
+        using var env = new LuaEnv(new LuaEnvOptions { StrictReflection = true });
+        register.Invoke(null, [env]);
+
+        using var table = (LuaTable)env.DoString("""
+            return {
+                Number = 3,
+                Name = 'probe',
+                Child = { Hp = 4, Name = 'child' },
+                Numbers = { 1, 2, 3 },
+                Position = { X = 1.5, Y = 2.5 },
+                Items = { 7, 8 }
+            }
+            """)[0]!;
+
+        var probe = table.Cast<CastProbe>();
+        Assert.Equal(3, probe.Number);
+        Assert.Equal("probe", probe.Name);
+        Assert.Equal(4, probe.Child!.Hp);
+        Assert.Equal("child", probe.Child.Name);
+        Assert.Equal([1, 2, 3], probe.Numbers);
+        Assert.Equal(1.5f, probe.Position.X);
+        Assert.Equal(2.5f, probe.Position.Y);
+        Assert.Equal([7, 8], probe.Items);
+        Assert.Equal(9, probe.ReadOnly);
+
+        using var vecTable = (LuaTable)env.DoString("return { X = 3.5, Y = 4.5 }")[0]!;
+        var vec = vecTable.Cast<Vec2>();
+        Assert.Equal(3.5f, vec.X);
+        Assert.Equal(4.5f, vec.Y);
+
+        using var noDefaultTable = (LuaTable)env.DoString("return { Value = 1 }")[0]!;
+        Assert.Throws<MissingMethodException>(() => noDefaultTable.Cast<NoDefaultCtor>());
     }
 
     [Fact]
@@ -537,6 +762,27 @@ public sealed class CodeGenTests
             """);
 
         Assert.Equal(5L, results[0]);
+    }
+
+    [Fact]
+    public void ReflectionFallbackDisabled_RegisteredBindingMissStillFallsBack()
+    {
+        using var env = new LuaEnv(new LuaEnvOptions { EnableReflectionFallback = false });
+        env.RegisterType(new LuaTypeBinding
+        {
+            Type = typeof(Player),
+            FullName = "LuaLoom.UnitTests.Sample.Player",
+            Call = NewPlayerHandler,
+            InstanceIndex = EmptyIndexHandler,
+        });
+
+        var results = env.DoString("""
+            local p = CS.LuaLoom.UnitTests.Sample.Player(2)
+            p.Name = 'fallback'
+            return p.Name
+            """);
+
+        Assert.Equal("fallback", results[0]);
     }
 
     [Fact]

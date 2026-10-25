@@ -110,6 +110,11 @@ public static class LuaBinding
 
     public static T[] ReadArray<T>(IntPtr state, int index)
     {
+        if (LuaApi.lua_type(state, index) == LuaApi.LuaTNil)
+        {
+            return null!;
+        }
+
         var marshal = LuaMarshalRegistry.Get(state);
         if (IsDirectArrayElement(typeof(T)))
         {
