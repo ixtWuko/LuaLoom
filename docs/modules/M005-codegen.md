@@ -31,6 +31,7 @@
 | E7 | 闭合泛型 delegate 可解析并生成，类型名与 `typeof` 使用完整泛型形式 | 配置 `Action<int>`、`Func<int,string>`、自定义 `Mapper<int,string>` 后编译通过 |
 | E8 | 开放泛型（``Action`1``、`Action<>`）输出 `LL0003` | 构造两类错误配置 |
 | E9 | 泛型产物的文件名稳定、只含字母数字与下划线 | 文件名不出现 `<`、`,`、`[`、程序集版本 |
+| E10 | 配置含未知字段、空 `namespace`、缺 `output` 时抛 `CodeGenException`，不产生文件 | 构造四类错误配置 |
 
 **非目标**
 
@@ -59,6 +60,8 @@
 }
 ```
 
+加载配置时做字段校验：未知字段、`assembly`/`output` 缺失、`namespace` 为空或不是合法 C# 命名空间、数组字段为 `null` 或含空字符串，都会抛 `CodeGenException`；CLI 退出码 `2`，不写任何文件。
+
 **命令**
 
 ```powershell
@@ -67,12 +70,15 @@ lua-loom-gen check    --config lua-loom.json
 lua-loom-gen generate --config lua-loom.json --coverage
 ```
 
+`lua-loom-gen` 是 `src/LuaLoom.Cli` 的产物名；从源码树使用时等价写法是
+`dotnet run --project src/LuaLoom.Cli -c Release -- <子命令> --config lua-loom.json`。
+
 `--coverage` 在标准输出打印生成数、反射数、跳过数，以及每个未生成成员的原因。
 
 | 场景 | 退出码 | 输出 |
 | :-- | :-- | :-- |
 | 生成成功 | `0` | 写入的文件数 |
-| 配置或类型错误 | `2` | 诊断码、文件、行号 |
+| 配置或类型错误 | `2` | 诊断码与消息 |
 | `check` 发现差异 | `1` | 差异文件清单 |
 | 参数缺失 | `64` | 用法说明 |
 
@@ -126,11 +132,11 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 5. 用 `CSharpSyntaxTree.ParseText` 做语法校验；真正的编译校验放在测试里，用 `CSharpCompilation` 对产物做一次 Emit。
 6. 通过后按文件名 `Ordinal` 排序写文件，UTF-8 无 BOM，换行 `\n`。
 7. 按配置类型、`reflectionUse` 与 `gcOptimize` 生成 `link.xml`，避免 Unity IL2CPP 裁剪反射/生成所需元数据；XML 文件跳过 C# 语法校验。`gcOptimize` 只接受值类型，GC 优化本身由 `StructCodec` 按 blittable 自动判定。`scripts/trim-check.ps1` 用 `PublishTrimmed` 发布示例并运行，作为裁剪烟测；IL2CPP 真机仍需在 Unity 侧验证。
-8. `check` 模式重新生成到内存，与磁盘文件逐字节比较，差异输出文件清单。
+8. `check` 模式重新生成到内存，与磁盘文件逐字节比较（含 `link.xml`），差异输出文件清单；输出目录里存在生成器不会产出的 `.g.cs` 或 `link.xml` 时按过期文件报告。
 9. 同时产出 `Coverage` 列表：每个配置成员标记 `generated` / `reflection` / `skipped`；`BlackList`/`DoNotGen` 命中的类型或成员记为 `skipped`，未生成原因随记录返回。命中接口任一成员时跳过整个接口实现，避免产出缺成员的实现类；命中 delegate 类型时跳过 invoker。
 10. `genericMethods` 按 `Type.Method<T1,T2>` 解析闭合实例，生成独立 binder，并在 `LuaBindings.Register` 中调用 `RegisterGenericMethod`。运行期 `lua_loom_generic` 先查这张表，命中后直接调用生成 handler；未配置的闭合实例仍走 `MakeGenericMethod` 反射，严格模式下会被拒绝。
 
-**复杂度**：O(类型数 × 成员数)；生成 100 个类型的耗时上限在模块验收中定为 5 秒以内（本机）。
+**复杂度**：O(类型数 × 成员数)；生成 100 个类型的耗时上限在模块验收中待测，目前没有基准数据。
 
 **接口契约与错误传播**
 
@@ -151,11 +157,11 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 操作符生成（`+ - * / %`、一元 `-`、`==`、`<`、`<=`） | 其它操作符 |
 | 实例索引器（非字符串键） | 字符串键索引器、静态索引器 |
 | 已配置基类的继承成员 | 未配置基类的成员 |
-| 实例/静态方法（含同参数个数重载，按 Lua 类型分派） | 未在 `genericMethods` 中列出的泛型方法（运行期 `lua_loom_generic`） |
+| 实例/静态方法（含同参数个数重载，按 Lua 类型与整数范围分派） | 未在 `genericMethods` 中列出的泛型方法（运行期 `lua_loom_generic`） |
 | `genericMethods` 指定的闭合泛型方法 | 泛型方法的全组合生成 |
 | `ref`/`out`/`params`、默认值及其与重载混合的组 | 带约束的泛型参数 |
 | 非泛型与闭合泛型 delegate（含 `params`/`ref`/`out`/数组） | 开放泛型 delegate |
-| interface 的方法、属性、事件与无约束泛型方法（含 `params`/`ref`/`out`/数组与闭合泛型接口） | 默认接口实现、显式接口实现、带约束的泛型方法 |
+| interface 的方法、属性、事件与无约束泛型方法（含继承的基接口成员、`params`/`ref`/`out`/数组与闭合泛型接口） | 默认接口实现、显式接口实现、带约束的泛型方法 |
 | 扩展方法类（列入 `luaCallCSharp`，生成注册与分派表） | 未配置的扩展方法不扫描、不可见 |
 | 一维/矩形数组参数/返回值（含类元素、字符串、枚举、`object`） | 交错数组的运行时特殊形状、非零下界数组 |
 | `decimal` 参数/返回值（生成与反射路径） | 非 decimal 的通用 struct 零 GC pack/unpack |
@@ -163,7 +169,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 配置类型的 `Cast<T>`（`RegisterCast`，含嵌套 class/struct、`List`/`Dictionary` 属性） | 无无参构造的类、接口、顶层集合/字典的生成式转换 |
 | `BlackList`/`DoNotGen` 类型或成员、`ReflectionUse`、`--coverage` 报告 | 按签名精确排除重载（当前按成员名排除整组） |
 
-同一参数个数的多个重载取声明顺序第一个；多类型重载的精确解析留给运行时反射路径。生成器跳过的成员不会丢失，由 [M004](M004-interop-bridge.md) 的回落路径接管。
+同一参数个数的多个重载按具体度排序（字符串/布尔/整数优先于 `object` 与 struct），生成带类型条件的分派。同名重载逐个过滤：`[Obsolete]` 或参数/返回类型不受支持的单个重载被跳过，其余照常生成。`int` 与 `long` 同时存在时按取值范围分派：落在 `int` 范围的整数命中 `int`，超出范围才命中 `long`，反射路径的评分采用同一规则。若同一参数位置的两个重载无法用类型条件区分（例如两个非基元 struct），该方法名的整组重载不生成，调用回落到反射；反射对这类 inline struct 参数同样不支持，实际结果是报「没有匹配的重载」，而不是命中错误的那个。生成器跳过的成员不会丢失，由 M004 的回落路径接管。
 
 **资源**：无外部资源；模板以 `StringBuilder` 拼接，不引入模板引擎。
 
@@ -182,6 +188,9 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 配置 ``System.Action`1`` 或 `System.Action<>` | `generate` | 诊断 `LL0003` |
 | 检查泛型产物文件名 | 文本检查 | 仅字母数字与下划线 |
 | 同一方法存在两个同参数个数重载 | `generate` | 生成类型条件分派，编译通过 |
+| 同名重载中有一个参数类型不受支持，或返回 `ref` | `generate` | 只跳过该重载，其余重载照常生成 |
+| 同时存在 `int` 与 `long` 重载 | `generate` + 运行 | `7` 命中 `int`，`4000000000` 命中 `long` |
+| 配置含未知字段、空 `namespace`、缺 `output`、`null` 数组 | `generate` | 抛 `CodeGenException`，退出码 `2`，无文件写入 |
 | 类型含 `[Obsolete]` 方法/字段 | `generate` | 产物不含该成员 |
 | 类型含同参数个数重载 | `generate` | 产物包含类型条件分派，编译通过 |
 | 单方法带默认值参数 | `generate` | 产物按实参个数生成分支，编译通过 |
@@ -194,6 +203,10 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 配置类型 | `generate` | 产物包含 `link.xml`，按程序集列出保留类型 |
 | 接口含 `params`/`ref`/`out`/数组 | `generate` + 编译 | 产物实现对应签名并通过 Emit |
 | 接口含事件与无约束泛型方法 | `generate` + 编译 | 产物含事件访问器与泛型方法，Emit 成功 |
+| 接口继承另一个接口 | `generate` + 编译 | 实现类补齐基接口成员，Emit 成功 |
+| 成员的参数/字段为 `byte`/`short`/`char`/`uint`/`ulong` | `generate` + 运行 | 产物用 `ReadByte`/`ReadShort`/`ReadChar`/`ReadUInt`/`ReadULong`，往返值正确 |
+| 默认值为含换行的字符串、`ulong` 底层枚举、`NaN` | `generate` + 编译 | 生成成功，产物编译并可运行 |
+| 输出目录存在生成器不会产出的 `.g.cs` | `check` | 退出码 `1`，按过期文件列出 |
 | delegate 含 `params`/`ref`/`out`/数组 | `generate` + 编译 | 产物包含对应 lambda 与转换，Emit 成功 |
 | 生成绑定 + `StrictReflection = true` | 运行时执行生成成员 | 正常返回，无反射兜底 |
 | `blackList` 含 `Player.Add` | `generate` | `Add` 不在产物中，覆盖记录为 `blacklisted member` |
@@ -211,6 +224,6 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 类型含 `this[int]` | `generate` | 绑定含 `InstanceIndexer`/`InstanceIndexerSet` |
 | 同一类型在 `luaCallCSharp` 出现两次 | `generate` | 诊断 `LL0004`，退出码 `2` |
 | 输出目录只读 | `generate` | 抛 `IOException`，已有文件不被破坏 |
-| 生成物被手改 | `check` | 退出码 `1` |
+| 生成物被手改或输出目录含过期文件 | `check` | 退出码 `1`，逐条列出差异文件名 |
 
-异常覆盖四类：空与边界（空的 `luaCallCSharp`、零成员类型）、非法输入（错误全名、开放泛型、重复配置）、依赖失败（程序集缺失、依赖解析失败、目录不可写）、重复与并发（重复执行、两个进程同时写同一输出目录时用文件锁串行）。
+异常覆盖四类：空与边界（空的 `luaCallCSharp`、零成员类型）、非法输入（错误全名、开放泛型、重复配置）、依赖失败（程序集缺失、依赖解析失败、目录不可写）、重复与并发（重复执行）。两个进程同时写同一输出目录没有加锁，不在覆盖范围内。

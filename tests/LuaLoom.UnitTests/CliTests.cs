@@ -33,6 +33,38 @@ public sealed class CliTests
     }
 
     [Fact]
+    public void Check_ReportsStaleGeneratedFiles()
+    {
+        using var workspace = new CliWorkspace();
+        var configPath = workspace.WriteConfig("LuaLoom.UnitTests.Sample.Player");
+
+        Assert.Equal(0, Run(workspace, "generate", "--config", configPath).ExitCode);
+        File.WriteAllText(Path.Combine(workspace.OutputDirectory, "StaleBinder.g.cs"), "// stale");
+
+        var check = Run(workspace, "check", "--config", configPath);
+
+        Assert.Equal(1, check.ExitCode);
+        Assert.Contains("StaleBinder.g.cs (stale)", check.Output);
+    }
+
+    [Fact]
+    public void Check_ReportsOutdatedLinkXml()
+    {
+        using var workspace = new CliWorkspace();
+        var configPath = workspace.WriteConfig("LuaLoom.UnitTests.Sample.Player");
+
+        Assert.Equal(0, Run(workspace, "generate", "--config", configPath).ExitCode);
+
+        var link = Path.Combine(workspace.OutputDirectory, "link.xml");
+        File.WriteAllText(link, "<linker />");
+
+        var check = Run(workspace, "check", "--config", configPath);
+
+        Assert.Equal(1, check.ExitCode);
+        Assert.Contains("Out of date: link.xml", check.Output);
+    }
+
+    [Fact]
     public void InvalidConfig_ReturnsConfigurationError()
     {
         using var workspace = new CliWorkspace();
@@ -44,15 +76,39 @@ public sealed class CliTests
         Assert.Contains("LL0001", result.Output);
     }
 
+    private static readonly Lazy<string> CliAssembly = new(ResolveCliAssembly);
+
+    private static string ResolveCliAssembly()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "LuaLoom.sln")))
+        {
+            directory = directory.Parent;
+        }
+
+        if (directory is null)
+        {
+            throw new InvalidOperationException("Could not locate LuaLoom.sln above the test output directory.");
+        }
+
+        var cliRoot = Path.Combine(directory.FullName, "artifacts", "bin", "LuaLoom.Cli");
+        if (Directory.Exists(cliRoot))
+        {
+            foreach (var candidate in Directory
+                         .EnumerateFiles(cliRoot, "lua-loom-gen.dll", SearchOption.AllDirectories)
+                         .OrderByDescending(File.GetLastWriteTimeUtc))
+            {
+                return candidate;
+            }
+        }
+
+        throw new InvalidOperationException(
+            "lua-loom-gen.dll was not found under artifacts/bin/LuaLoom.Cli; build the solution before running CLI tests.");
+    }
+
     private static (int ExitCode, string Output) Run(CliWorkspace workspace, params string[] args)
     {
-        var cli = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory,
-            "..",
-            "..",
-            "LuaLoom.Cli",
-            "release",
-            "lua-loom-gen.dll"));
+        var cli = CliAssembly.Value;
 
         var startInfo = new ProcessStartInfo("dotnet")
         {

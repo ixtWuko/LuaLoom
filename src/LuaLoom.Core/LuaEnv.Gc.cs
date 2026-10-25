@@ -7,13 +7,15 @@ public sealed partial class LuaEnv
     private const int GcSetPause = 6;
     private const int GcSetStepMultiplier = 7;
 
-    /// <summary>GC pause 参数；读写都映射到 <c>LUA_GCSETPAUSE</c>。</summary>
+    /// <summary>GC pause 参数；<c>lua_gc</c> 没有读取入口，getter 先取旧值再立即写回。</summary>
     public int GcPause
     {
         get
         {
             EnsureReady();
-            return LuaApi.lua_gc(_state, GcSetPause, 0);
+            var previous = LuaApi.lua_gc(_state, GcSetPause, 0);
+            LuaApi.lua_gc(_state, GcSetPause, previous);
+            return previous;
         }
         set
         {
@@ -22,13 +24,15 @@ public sealed partial class LuaEnv
         }
     }
 
-    /// <summary>GC step multiplier；读写都映射到 <c>LUA_GCSETSTEPMUL</c>。</summary>
+    /// <summary>GC step multiplier；读取方式与 <see cref="GcPause"/> 相同。</summary>
     public int GcStepMultiplier
     {
         get
         {
             EnsureReady();
-            return LuaApi.lua_gc(_state, GcSetStepMultiplier, 0);
+            var previous = LuaApi.lua_gc(_state, GcSetStepMultiplier, 0);
+            LuaApi.lua_gc(_state, GcSetStepMultiplier, previous);
+            return previous;
         }
         set
         {

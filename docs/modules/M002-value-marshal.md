@@ -32,7 +32,7 @@
 
 **非目标**
 
-- 自动把含引用字段的 struct 做零拷贝传递（走装箱路径）。
+- 含引用字段的 struct 既不做内联也不走装箱回退，直接抛 `NotSupportedException`。
 - 自动同步：`Cast<T>` 是值拷贝，C# 侧修改不回写 Lua 表。
 
 ## 使用与交互设计
@@ -198,10 +198,10 @@ id 的复用交给 `luaL_ref` 自带的空闲链，不再维护第二套。
 **接口契约与错误传播**
 
 - 所有原语显式传 `IntPtr L` 与栈索引，不使用隐式「当前栈顶」状态，避免调用顺序耦合。
-- 越界索引按 `lua_type` 结果为 `LuaType.None` 处理，抛 `ArgumentOutOfRangeException`，不算类型错误。
+- 栈索引越界或类型不符统一抛 `LuaConversionException`，不做越界读取。
 - `LuaTable.Get` 缺失键返回 `default(T)`；类型不匹配抛 `LuaConversionException`，消息含键名与目标类型。
 - struct 内联读写使用 `unsafe`，工程开启 `AllowUnsafeBlocks`；`unsafe` 代码只允许出现在本模块。
-- 分配失败（`lua_checkstack` 返回 0）转 `LuaException`，不返回 false。
+- 含引用字段的 struct 没有内联或装箱实现，直接抛 `NotSupportedException`。
 
 **资源**：无外部资源；userdata 元表在初始化时一次性创建并存入 registry。
 
@@ -213,7 +213,7 @@ id 的复用交给 `luaL_ref` 自带的空闲链，不再维护第二套。
 | `long.MinValue`、`long.MaxValue`、`ulong.MaxValue` | 往返 | 值不变，无分配 |
 | `float.NaN`、`double.PositiveInfinity` | 往返 | 按 IEEE-754 保真 |
 | 单字段 struct 与三层嵌套 struct | 往返 100 万次 | 值相等，分配为 0 |
-| 含 `string` 字段的 struct | 往返 | 走装箱路径，值正确，允许分配 |
+| 含 `string` 字段的 struct | 往返 | 抛 `NotSupportedException`（不支持内联） |
 | 同一个对象 push 两次 | Lua 侧 `rawequal` | `true`，id 相同 |
 | 栈上是 string，读取 `int` | `Read<int>` | 抛 `LuaConversionException`，消息含 `String` 与期望 `Int32` |
 | 栈上是 `3.7`，读取 `int` | `Read<int>` | 抛 `LuaConversionException`（小数部分不为 0） |
@@ -223,6 +223,9 @@ id 的复用交给 `luaL_ref` 自带的空闲链，不再维护第二套。
 | 表 `{hp=100}` | `Get<int>("hp")` / `Get<int>("mp")` | 返回 `100` / 返回 `0` |
 | 表 `{hp="x"}` | `Get<int>("hp")` | 抛 `LuaConversionException`，消息含键名 |
 | 嵌套表 `{a={b={c=3}}}` | `GetInPath<int>("a.b.c")` | 返回 `3`，引用计数不变 |
+| 含中文的字符串与表键 | C# 写入后 Lua 侧 `utf8.len` / `t["键"]` | 按 UTF-8 计长与命中 |
+| `__index` / `__newindex` 元方法报错、键为 `nil` | `Get` / `Set` | 抛 `LuaException`，环境仍可用 |
+| 栈上是字符串 | `Get<LuaTable>` | 抛 `LuaConversionException`（不产生假句柄） |
 | 句柄不释放后触发 GC | 调 `Tick()` | 弱引用失效，引用计数回到基线 |
 | 已释放句柄 | 调 `Get` | 抛 `ObjectDisposedException` |
 

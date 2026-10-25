@@ -171,6 +171,11 @@ internal static class Interop
 
         if (type.IsInterface)
         {
+            if (LuaApi.lua_type(state, index) != LuaApi.LuaTTable)
+            {
+                throw new LuaConversionException(type.Name, DescribeLuaType(state, index), index);
+            }
+
             var table = environment.Marshal.CreateTableFrom(index);
             if (environment.TryGetInterfaceFactory(type, out var factory))
             {
@@ -1380,6 +1385,13 @@ internal static class Interop
                 if (underlying == typeof(long) || underlying == typeof(ulong))
                 {
                     return 5;
+                }
+
+                if (underlying == typeof(int))
+                {
+                    // 落在 int 范围内的整数优先命中 int 重载，与生成代码的分派条件保持一致
+                    var integer = (long)value;
+                    return integer >= int.MinValue && integer <= int.MaxValue ? 6 : 4;
                 }
 
                 return IsIntegral(underlying) ? 4 : 2;

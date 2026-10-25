@@ -17,14 +17,20 @@ public sealed class OverloadTests
         Assert.Equal("string", results[0]);
     }
 
-    [Fact]
-    public void IntegerArgument_PrefersLongOverload()
+    [Theory]
+    [InlineData("1", "int")]
+    [InlineData("-2147483648", "int")]
+    [InlineData("2147483647", "int")]
+    [InlineData("2147483648", "long")]
+    [InlineData("-2147483649", "long")]
+    [InlineData("4000000000", "long")]
+    public void IntegerArgument_UsesValueRange(string literal, string expected)
     {
         using var env = new LuaEnv();
 
-        var results = env.DoString($"return {Overloads}.Pick(1)");
+        var results = env.DoString($"return {Overloads}.Pick({literal})");
 
-        Assert.Equal("long", results[0]);
+        Assert.Equal(expected, results[0]);
     }
 
     [Fact]

@@ -26,9 +26,9 @@
 | E2 | 进入守卫时记录 `lua_gettop`，离开时恢复到同一值 | 单测里在 `using` 前后比较 `lua_gettop` |
 | E3 | 守卫体内抛托管异常，栈仍恢复 | 故意抛异常后比较 `lua_gettop` |
 | E4 | `lua_pcallk` 返回非 `Ok` 时抛 `LuaException`，消息含状态码与错误文本 | 加载 `error('boom')` 后调用断言 |
-| E5 | 同一进程内重复加载原生库不重复 `LoadLibrary` | 断言 `ILibraryLoader.Load` 调用次数为 1 |
+| E5 | 同一进程内重复加载原生库不重复 `LoadLibrary` | 连续两次 `Load` 返回同一指针 |
 | E6 | `-p:LuaVersion=53` 使用 5.3.6 原生库构建，同一组用例通过 | 检查 `LuaApi.Profile.Version` 与测试结果 |
-| E7 | 加载器按当前 RID 查找 `artifacts/native/<rid>/` 与 `runtimes/<rid>/native/` | 三个平台 CI 均能创建 `LuaEnv` |
+| E7 | 加载器按 `LUALOOM_NATIVE_DIR`、库名、`runtimes/<rid>/native/`、程序目录依次查找 | 三个平台 CI 均能创建 `LuaEnv` |
 | E8 | 当前 RID 缺库时异常列出所有尝试路径 | `LuaLibraryNotFoundException.AttemptedPaths` |
 
 **非目标**
@@ -64,7 +64,7 @@ LuaApi.lua_close(L);
 
 panic 不在本模块处理：注册托管 panic 回调意味着异常可能穿过 C 栈帧，行为未定义；保持 Lua 默认的打印并终止进程，P1 再评估安全方案。
 
-**界面**：本模块无界面。对外只暴露 `ILibraryLoader`、`LuaCSFunction` 与两个异常类型，其余为 `internal`。
+**界面**：本模块无界面。对外暴露 `ILibraryLoader`、`NativeLibraryLoader`、`LuaCSFunction`、`LuaStatus` 与两个异常类型，其余为 `internal`。
 
 ## 具体实现细节
 
@@ -141,14 +141,14 @@ pwsh scripts/ci.ps1 -Version 53
 - 加载顺序见算法第 1 条；`RuntimeInformation.RuntimeIdentifier` 决定优先查找的 RID 目录。
 - `LuaLoom.Native.csproj` 把当前 RID 的原生库复制到输出目录，`LuaNativeRid` 可由 MSBuild 属性覆盖，便于交叉构建。
 - CMake 统一目标名 `lualoom`，Unix 自动加 `lib` 前缀与 `.so`/`.dylib` 后缀，启用 `POSITION_INDEPENDENT_CODE`，`LUA_BUILD_AS_DLL` 只在 Windows 定义。
-- GitHub Actions 矩阵覆盖 `windows-latest`、`ubuntu-22.04`、`macos-14`，分别执行原生构建、编译、测试、生成物检查与示例；另有 `ubuntu-22.04` 的 Lua 5.3 job。
+- GitHub Actions 矩阵覆盖 `windows-2022`、`ubuntu-22.04`、`macos-14`，分别执行原生构建、编译、测试、生成物检查与示例；另有 `ubuntu-22.04` 的 Lua 5.3 job。
 - 限制：Linux 产物最低 glibc 2.35；macOS `.dylib` 未签名；arm64 Windows/Linux 与移动端未覆盖。
 
 **复杂度**：加载 O(1)（进程内缓存）；守卫 O(1)；`pcall` 封装 O(1)。
 
 **接口契约与错误传播**
 
-- `LuaApi` 全部方法 `internal static extern`，`CallingConvention.Cdecl`，参数只用 `IntPtr`、`int`、`double`、`long`、`ulong`、`string`、`byte[]`，不出现 `bool`（避免封送歧义，用 `int`）。
+- `LuaApi` 全部方法 `internal static extern`，`CallingConvention.Cdecl`，参数只用 `IntPtr`、`int`、`double`、`long`、`ulong`、`string`、`byte[]`，不出现 `bool`（避免封送歧义，用 `int`）；`string` 形参统一标 `MarshalAs(UnmanagedType.LPUTF8Str)`，与 Lua 侧的 UTF-8 字节一致。
 - `LuaApi`/`LuaStackGuard` 通过 `InternalsVisibleTo("LuaLoom.Core")` 与 `InternalsVisibleTo("LuaLoom.UnitTests")` 开放；生成代码不在此列，只能走 M002 的 `LuaBinding`。
 - 本模块不捕获异常，只做转换；栈恢复由守卫负责，二者职责不重叠。
 

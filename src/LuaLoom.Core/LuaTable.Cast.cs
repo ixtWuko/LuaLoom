@@ -331,10 +331,15 @@ public sealed partial class LuaTable
     {
         if (value is LuaTable nested)
         {
+            if (target == typeof(LuaTable))
+            {
+                // 句柄所有权转交调用方，不能在这里释放
+                return nested;
+            }
+
             try
             {
-                if (target != typeof(LuaTable)
-                    && !typeof(LuaFunction).IsAssignableFrom(target)
+                if (!typeof(LuaFunction).IsAssignableFrom(target)
                     && (target.IsClass || (target.IsValueType && !target.IsPrimitive && !target.IsEnum)))
                 {
                     return typeof(LuaTable)
@@ -342,6 +347,8 @@ public sealed partial class LuaTable
                         .MakeGenericMethod(target)
                         .Invoke(nested, null);
                 }
+
+                return Interop.ConvertValue(value, target);
             }
             finally
             {

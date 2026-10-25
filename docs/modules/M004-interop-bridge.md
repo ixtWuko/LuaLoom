@@ -72,7 +72,6 @@
 public sealed partial class LuaTable
 {
     public T Cast<T>();
-    public void SetMetaTable(LuaTable meta);
 }
 
 public interface ILuaDelegateInvoker
@@ -169,7 +168,7 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 4. 接口代理兜底：`DispatchProxy.Create<T, LuaInterfaceProxy>()`；`Invoke` 按方法名查表，参数与返回值走 M002，转换失败抛 `LuaConversionException`。
 5. 反射兜底（Lua 调 C#）：按成员名查 `PropertyInfo`/`FieldInfo`/`MethodInfo`/`EventInfo`；绑定 thunk 返回未处理时进入这一层，事件与索引器沿用各自的闭包路径。
 6. 句柄的释放与终结器由 M002 负责，本模块只消费引用 id。
-7. 重载解析：反射路径按参数形状装配并评分，精确类型优先，其次可转换类型，最后是可使用默认值的候选；得分最高者胜出，同分取声明顺序第一个。生成路径按 Lua 类型条件与动态 arity 分派，未配置或生成器不支持的组合才回退反射。
+7. 重载解析：反射路径按参数形状装配并评分，精确类型优先，其次可转换类型，最后是可使用默认值的候选；得分最高者胜出，同分取声明顺序第一个。整数参数落在 `int` 范围时 `int` 候选得分高于 `long`，超出范围才命中 `long`。生成路径按 Lua 类型条件、整数范围与动态 arity 分派，未配置或生成器不支持的组合才回退反射。
 8. 类型解析：先查已注册的 `LuaTypeBinding`，再按 `EnableReflectionFallback` 走反射，最后抛 Lua 错误；类表统一安装带 `fqn` 的分派入口，绑定未命中的键继续走反射。`StrictReflection = true` 时，未注册类型、绑定未命中的成员、反射版构造/事件/操作符/索引器/泛型调用与反射扩展查找都直接抛错；`typeof`、`cast`、`xlua.private_accessible` 等显式反射 API 不受影响。
 9. 参数装配：`out` 填默认值且不消耗实参，`ref` 与普通参数各消耗一个，`params` 把剩余实参转换后写入数组；调用后先压返回值（非 `void`），再按参数顺序压 `ref`/`out`，`in` 不回写。生成绑定对单方法与复杂重载组执行同一规则；只有未配置或无法生成的成员才回退反射。
 10. 操作符：实例 metatable 上挂 `__add`/`__sub`/`__mul`/`__div`/`__mod`/`__unm`/`__eq`/`__lt`/`__le`；C# delegate 的 `+`/`-` 直接走 `Delegate.Combine`/`Remove`；其余先查配置类型的生成 `Operators`，未命中再按名称查 `op_*` 静态方法。`__unm` 按 Lua 约定收到两个相同操作数，只取第一个匹配单参数方法；`__eq` 无运算符时退回引用比较。

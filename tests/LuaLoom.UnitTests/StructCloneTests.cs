@@ -26,7 +26,9 @@ public sealed class StructCloneTests
             return {VecType}.Read(clone)
             """);
 
-        Assert.Equal(3d, Convert.ToDouble(results[0]));
+        Assert.Equal(2, results.Length);
+        Assert.Equal(1d, Convert.ToDouble(results[0]));
+        Assert.Equal(2d, Convert.ToDouble(results[1]));
     }
 
     private static readonly LuaCSFunction StaticIndexHandler = StaticIndex;
@@ -58,7 +60,8 @@ public sealed class StructCloneTests
     private static int Read(IntPtr state)
     {
         var value = LuaBinding.ReadStruct<Vec2>(state, 1);
-        LuaBinding.PushDouble(state, value.X + value.Y);
-        return 1;
+        LuaBinding.PushDouble(state, value.X);
+        LuaBinding.PushDouble(state, value.Y);
+        return 2;
     }
 }

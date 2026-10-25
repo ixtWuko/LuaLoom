@@ -288,4 +288,18 @@ public sealed class LuaEnvTests
             env.GcStepMultiplier = originalStep;
         }
     }
+
+    [Fact]
+    public void GcParameters_ReadingTwice_KeepsValues()
+    {
+        using var env = new LuaEnv();
+        // 5.4 内部按 4 对齐，取 4 的倍数避免取整干扰
+        env.GcPause = 248;
+        env.GcStepMultiplier = 148;
+
+        Assert.Equal(248, env.GcPause);
+        Assert.Equal(248, env.GcPause);
+        Assert.Equal(148, env.GcStepMultiplier);
+        Assert.Equal(148, env.GcStepMultiplier);
+    }
 }

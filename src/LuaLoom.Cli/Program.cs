@@ -67,10 +67,10 @@ static int Run(string[] args)
         }
 
         var outputDirectory = Path.GetFullPath(Path.Combine(baseDirectory, config.Output));
-        Directory.CreateDirectory(outputDirectory);
 
         if (command == "generate")
         {
+            Directory.CreateDirectory(outputDirectory);
             foreach (var file in result.Files)
             {
                 var path = Path.Combine(outputDirectory, file.FileName);
@@ -91,11 +91,32 @@ static int Run(string[] args)
             }
         }
 
+        if (Directory.Exists(outputDirectory))
+        {
+            var produced = new HashSet<string>(
+                result.Files.Select(static file => file.FileName),
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var path in Directory.EnumerateFiles(outputDirectory))
+            {
+                var name = Path.GetFileName(path);
+                if (!name.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(name, "link.xml", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!produced.Contains(name))
+                {
+                    differences.Add(name + " (stale)");
+                }
+            }
+        }
+
         if (differences.Count > 0)
         {
-            foreach (var file in differences)
+            foreach (var difference in differences.Order(StringComparer.Ordinal))
             {
-                Console.Error.WriteLine($"Out of date: {file}");
+                Console.Error.WriteLine($"Out of date: {difference}");
             }
 
             return 1;

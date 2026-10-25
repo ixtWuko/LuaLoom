@@ -29,7 +29,7 @@ public sealed partial class LuaTable : LuaReference
         var state = Marshal.State;
         using var guard = LuaStackGuard.Enter(state);
         Marshal.PushReference(Id);
-        LuaApi.lua_getfield(state, -1, key);
+        Marshal.PushIndexedValue(-1, key);
 
         if (LuaApi.lua_type(state, -1) == LuaApi.LuaTNil)
         {
@@ -52,8 +52,7 @@ public sealed partial class LuaTable : LuaReference
         var state = Marshal.State;
         using var guard = LuaStackGuard.Enter(state);
         Marshal.PushReference(Id);
-        Marshal.Push(key);
-        LuaApi.lua_gettable(state, -2);
+        Marshal.PushIndexedValue(-1, key);
 
         if (LuaApi.lua_type(state, -1) == LuaApi.LuaTNil)
         {
@@ -72,9 +71,7 @@ public sealed partial class LuaTable : LuaReference
         var state = Marshal.State;
         using var guard = LuaStackGuard.Enter(state);
         Marshal.PushReference(Id);
-        Marshal.Push(key);
-        Marshal.Push(value);
-        LuaApi.lua_settable(state, -3);
+        Marshal.SetIndexedValue(-1, key, value);
     }
 
     public T GetInPath<T>(string path)
@@ -88,7 +85,7 @@ public sealed partial class LuaTable : LuaReference
 
         foreach (var segment in path.Split('.'))
         {
-            LuaApi.lua_getfield(state, -1, segment);
+            Marshal.PushIndexedValue(-1, segment);
             if (LuaApi.lua_type(state, -1) == LuaApi.LuaTNil)
             {
                 return default!;
@@ -125,14 +122,13 @@ public sealed partial class LuaTable : LuaReference
         var segments = path.Split('.');
         for (var i = 0; i < segments.Length - 1; i++)
         {
-            LuaApi.lua_getfield(state, -1, segments[i]);
+            Marshal.PushIndexedValue(-1, segments[i]);
             if (LuaApi.lua_type(state, -1) != LuaApi.LuaTTable)
             {
                 throw new InvalidOperationException($"Path segment '{segments[i]}' is not a table.");
             }
         }
 
-        Marshal.Push(value);
-        LuaApi.lua_setfield(state, -2, segments[^1]);
+        Marshal.SetIndexedValue(-1, segments[^1], value);
     }
 }

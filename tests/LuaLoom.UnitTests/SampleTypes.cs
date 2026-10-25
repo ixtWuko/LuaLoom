@@ -552,3 +552,69 @@ public sealed class NumberList
 
     public int Total;
 }
+
+public sealed class TableHolder
+{
+    public LuaTable? Payload { get; set; }
+}
+
+public enum BigEnum : ulong
+{
+    Max = ulong.MaxValue,
+}
+
+public interface IBaseSurface
+{
+    int BaseValue();
+}
+
+public interface IDerivedSurface : IBaseSurface
+{
+    int Increment(int value);
+}
+
+public sealed class NumericSurface
+{
+    public byte ByteValue;
+    public sbyte SByteValue;
+    public short ShortValue;
+    public ushort UShortValue;
+    public uint UIntValue { get; set; }
+    public ulong ULongValue;
+    public char Letter;
+}
+
+public struct Size2
+{
+    public int Width;
+    public int Height;
+}
+
+public sealed class AmbiguousSurface
+{
+    public static void Use(Vec2 value) => _ = value;
+
+    public static void Use(Size2 value) => _ = value;
+}
+
+public sealed class PartialSurface
+{
+    private static int _value;
+
+    public static int Stable(int value) => value;
+
+    public static int Stable(List<int> values) => values.Count;
+
+    public static ref int RefReturn() => ref _value;
+}
+
+public sealed class DefaultSurface
+{
+    public static string WithNewline(string text = "line1\nline2") => text;
+
+    public static BigEnum WithBig(BigEnum value = BigEnum.Max) => value;
+
+    public static double WithNaN(double value = double.NaN) => value;
+
+    public static double WithInfinity(double value = double.PositiveInfinity) => value;
+}

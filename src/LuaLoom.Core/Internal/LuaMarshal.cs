@@ -19,6 +19,12 @@ internal sealed class LuaMarshal : IDisposable
     private static readonly IntPtr ObjectGcPointer =
         NativeMarshal.GetFunctionPointerForDelegate(ObjectGcCallback);
 
+    private static readonly LuaCSFunction IndexCallback = OnProtectedIndex;
+    private static readonly IntPtr IndexPointer = NativeMarshal.GetFunctionPointerForDelegate(IndexCallback);
+
+    private static readonly LuaCSFunction NewIndexCallback = OnProtectedNewIndex;
+    private static readonly IntPtr NewIndexPointer = NativeMarshal.GetFunctionPointerForDelegate(NewIndexCallback);
+
     /// <summary>M004 安装的桥接读取钩子：处理 delegate 与 interface 类型。</summary>
     internal static Func<IntPtr, Type, int, object?>? BridgeReader;
 
@@ -30,7 +36,12 @@ internal sealed class LuaMarshal : IDisposable
     private readonly List<object?> _objects = new();
     private readonly Stack<int> _freeObjectIds = new();
     private readonly object _objectGate = new();
+    private readonly List<LuaCSFunction> _thunks = new();
+    private readonly Dictionary<LuaCSFunction, int> _thunkIds = new();
     private readonly int _objectCacheRef;
+    private readonly int _objectMetaRef;
+    private readonly int _indexRef;
+    private readonly int _newIndexRef;
     private int _disposed;
 
     public LuaMarshal(IntPtr state)
@@ -40,8 +51,10 @@ internal sealed class LuaMarshal : IDisposable
 
         using (LuaStackGuard.Enter(state))
         {
-            CreateObjectMetatable();
+            _objectMetaRef = CreateObjectMetatable();
             _objectCacheRef = CreateWeakValueCache();
+            _indexRef = RegisterAccessor(IndexPointer);
+            _newIndexRef = RegisterAccessor(NewIndexPointer);
         }
 
         LuaMarshalRegistry.Register(state, this);
@@ -64,6 +77,8 @@ internal sealed class LuaMarshal : IDisposable
         }
 
         LuaMarshalRegistry.Unregister(_state);
+        _thunks.Clear();
+        _thunkIds.Clear();
         lock (_objectGate)
         {
             _objectIds.Clear();
@@ -128,6 +143,57 @@ internal sealed class LuaMarshal : IDisposable
         LuaApi.lua_settop(_state, index - 1);
         return value;
     }
+
+    /// <summary>
+    /// 取 table 的 key 字段并压栈。走 Lua 的 pcall：元方法（<c>__index</c>）报错或键非法时
+    /// 转成 <see cref="LuaException"/>，而不是让 Lua 以未保护错误终止进程。
+    /// </summary>
+    public void PushIndexedValue(int tableIndex, string key)
+    {
+        var target = LuaApi.lua_absindex(_state, tableIndex);
+        PushReference(_indexRef);
+        LuaApi.lua_pushvalue(_state, target);
+        LuaApi.lua_pushstring(_state, key);
+        LuaErrors.PCall(_state, 2, 1, "table");
+    }
+
+    /// <summary>同 <see cref="PushIndexedValue(int, string)"/>，键为任意可编组值。</summary>
+    public void PushIndexedValue<TKey>(int tableIndex, TKey key)
+    {
+        var target = LuaApi.lua_absindex(_state, tableIndex);
+        PushReference(_indexRef);
+        LuaApi.lua_pushvalue(_state, target);
+        Push(key);
+        LuaErrors.PCall(_state, 2, 1, "table");
+    }
+
+    /// <summary>对 table 的 key 赋值，同样受 pcall 保护（<c>__newindex</c> 报错转异常）。</summary>
+    public void SetIndexedValue<TKey, TValue>(int tableIndex, TKey key, TValue value)
+    {
+        var target = LuaApi.lua_absindex(_state, tableIndex);
+        PushReference(_newIndexRef);
+        LuaApi.lua_pushvalue(_state, target);
+        Push(key);
+        Push(value);
+        LuaErrors.PCall(_state, 3, 0, "table");
+    }
+
+    /// <summary>登记生成代码的方法入口，返回闭包 upvalue 的编号；同时保持委托存活。同一委托只登记一次。</summary>
+    internal int AddThunk(LuaCSFunction thunk)
+    {
+        if (_thunkIds.TryGetValue(thunk, out var existing))
+        {
+            return existing;
+        }
+
+        var id = _thunks.Count;
+        _thunks.Add(thunk);
+        _thunkIds.Add(thunk, id);
+        return id;
+    }
+
+    internal LuaCSFunction? GetThunk(int id) =>
+        id >= 0 && id < _thunks.Count ? _thunks[id] : null;
 
     public LuaTable CreateTable(int arraySize = 0, int recordSize = 0)
     {
@@ -405,8 +471,8 @@ internal sealed class LuaMarshal : IDisposable
 
         if (typeof(LuaReference).IsAssignableFrom(type))
         {
-            var reference = CreateReference(type, index);
-            return (T)(object)reference;
+            EnsureReferenceType(type, index);
+            return (T)(object)CreateReference(type, index);
         }
 
         if (typeof(Delegate).IsAssignableFrom(type) || type.IsInterface)
@@ -550,6 +616,7 @@ internal sealed class LuaMarshal : IDisposable
 
         if (typeof(LuaReference).IsAssignableFrom(type))
         {
+            EnsureReferenceType(type, index);
             return CreateReference(type, index);
         }
 
@@ -658,12 +725,16 @@ internal sealed class LuaMarshal : IDisposable
         }
     }
 
-    private void CreateObjectMetatable()
+    private int CreateObjectMetatable()
     {
         LuaApi.luaL_newmetatable(_state, ObjectMetaName);
+        var reference = _references.Add(LuaApi.lua_gettop(_state));
+
+        LuaApi.lua_rawgeti(_state, LuaApi.Profile.RegistryIndex, reference);
         LuaApi.lua_pushcclosure(_state, ObjectGcPointer, 0);
         LuaApi.lua_setfield(_state, -2, "__gc");
         LuaApi.lua_settop(_state, LuaApi.lua_gettop(_state) - 1);
+        return reference;
     }
 
     private int CreateWeakValueCache()
@@ -674,6 +745,26 @@ internal sealed class LuaMarshal : IDisposable
         LuaApi.lua_setfield(_state, -2, "__mode");
         LuaApi.lua_setmetatable(_state, -2);
         return _references.Add(LuaApi.lua_gettop(_state));
+    }
+
+    private int RegisterAccessor(IntPtr pointer)
+    {
+        LuaApi.lua_pushcclosure(_state, pointer, 0);
+        return _references.Add(LuaApi.lua_gettop(_state));
+    }
+
+    private static int OnProtectedIndex(IntPtr state)
+    {
+        LuaApi.lua_settop(state, 2);
+        LuaApi.lua_gettable(state, 1);
+        return 1;
+    }
+
+    private static int OnProtectedNewIndex(IntPtr state)
+    {
+        LuaApi.lua_settop(state, 3);
+        LuaApi.lua_settable(state, 1);
+        return 0;
     }
 
     private void PushObjectReference(object value)
@@ -746,12 +837,21 @@ internal sealed class LuaMarshal : IDisposable
 
     internal object? GetObjectFromUserdata(int index)
     {
-        if (LuaApi.lua_getmetatable(_state, index) == 0)
+        if (LuaApi.lua_type(_state, index) != LuaApi.LuaTUserData
+            || LuaApi.lua_getmetatable(_state, index) == 0)
         {
             return null;
         }
 
-        LuaApi.lua_settop(_state, LuaApi.lua_gettop(_state) - 1);
+        // 只认 LuaLoom 自己的对象元表：外来 userdata 不能被当成 C# 对象
+        LuaApi.lua_rawgeti(_state, LuaApi.Profile.RegistryIndex, _objectMetaRef);
+        var sameMetatable = LuaApi.lua_rawequal(_state, -1, -2) != 0;
+        LuaApi.lua_settop(_state, LuaApi.lua_gettop(_state) - 2);
+
+        if (!sameMetatable)
+        {
+            return null;
+        }
 
         var pointer = LuaApi.lua_touserdata(_state, index);
         if (pointer == IntPtr.Zero)
@@ -839,6 +939,15 @@ internal sealed class LuaMarshal : IDisposable
         }
 
         return 0;
+    }
+
+    private void EnsureReferenceType(Type type, int index)
+    {
+        var expected = type == typeof(LuaFunction) ? LuaApi.LuaTFunction : LuaApi.LuaTTable;
+        if (LuaApi.lua_type(_state, index) != expected)
+        {
+            throw Conversion(type.Name, index);
+        }
     }
 
     private LuaReference CreateReference(Type type, int index)

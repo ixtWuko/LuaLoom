@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.CodeAnalysis.CSharp;
 
 namespace LuaLoom.CodeGen;
@@ -89,6 +90,7 @@ public static class CodeGenerator
     {
         PropertyNameCaseInsensitive = true,
         ReadCommentHandling = JsonCommentHandling.Skip,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
     };
 
     public static GeneratorConfig LoadConfig(string configPath)
@@ -99,15 +101,64 @@ public static class CodeGenerator
             throw new CodeGenException($"Config file not found: {fullPath}");
         }
 
-        var config = JsonSerializer.Deserialize<GeneratorConfig>(File.ReadAllText(fullPath), JsonOptions)
-            ?? throw new CodeGenException($"Config file is empty or invalid: {fullPath}");
+        GeneratorConfig config;
+        try
+        {
+            config = JsonSerializer.Deserialize<GeneratorConfig>(File.ReadAllText(fullPath), JsonOptions)
+                ?? throw new CodeGenException($"Config file is empty or invalid: {fullPath}");
+        }
+        catch (JsonException exception)
+        {
+            throw new CodeGenException(
+                $"Config file is invalid: {fullPath}{Environment.NewLine}{exception.Message}");
+        }
 
+        ValidateConfig(config);
+        return config;
+    }
+
+    private static void ValidateConfig(GeneratorConfig config)
+    {
         if (string.IsNullOrWhiteSpace(config.Assembly))
         {
             throw new CodeGenException("Config field 'assembly' is required.");
         }
 
-        return config;
+        if (string.IsNullOrWhiteSpace(config.Output))
+        {
+            throw new CodeGenException("Config field 'output' is required.");
+        }
+
+        if (!IsValidNamespace(config.Namespace))
+        {
+            throw new CodeGenException(
+                $"Config field 'namespace' must be a valid C# namespace, got '{config.Namespace}'.");
+        }
+
+        RequireArray(config.LuaCallCSharp, "luaCallCSharp");
+        RequireArray(config.CSharpCallLua, "csharpCallLua");
+        RequireArray(config.GenericMethods, "genericMethods");
+        RequireArray(config.ReflectionUse, "reflectionUse");
+        RequireArray(config.GCOptimize, "gcOptimize");
+        RequireArray(config.BlackList, "blackList");
+        RequireArray(config.DoNotGen, "doNotGen");
+    }
+
+    private static bool IsValidNamespace(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && value.Split('.').All(static part => SyntaxFacts.IsValidIdentifier(part));
+
+    private static void RequireArray(string[]? values, string name)
+    {
+        if (values is null)
+        {
+            throw new CodeGenException($"Config field '{name}' must be an array.");
+        }
+
+        if (values.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new CodeGenException($"Config field '{name}' contains an empty entry.");
+        }
     }
 
     public static GenerationResult Generate(GeneratorConfig config, string baseDirectory)
@@ -1877,14 +1928,59 @@ public static class CodeGenerator
         var type = parameter.ParameterType;
         if (type.IsEnum)
         {
-            return $"({TypeRef(type)})({Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture)})";
+            if (Is(Enum.GetUnderlyingType(type), typeof(ulong)))
+            {
+                var unsigned = Convert.ToUInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+                return $"({TypeRef(type)})({unsigned.ToString(System.Globalization.CultureInfo.InvariantCulture)}UL)";
+            }
+
+            var signed = Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+            return $"({TypeRef(type)})({signed.ToString(System.Globalization.CultureInfo.InvariantCulture)})";
         }
 
         if (value is string text)
         {
-            return "\"" + text
-                .Replace("\\", "\\\\", StringComparison.Ordinal)
-                .Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+            var builder = new StringBuilder(text.Length + 2);
+            builder.Append('"');
+            foreach (var letter in text)
+            {
+                switch (letter)
+                {
+                    case '\\':
+                        builder.Append("\\\\");
+                        break;
+                    case '"':
+                        builder.Append("\\\"");
+                        break;
+                    case '\n':
+                        builder.Append("\\n");
+                        break;
+                    case '\r':
+                        builder.Append("\\r");
+                        break;
+                    case '\t':
+                        builder.Append("\\t");
+                        break;
+                    case '\0':
+                        builder.Append("\\0");
+                        break;
+                    default:
+                        if (char.IsControl(letter))
+                        {
+                            builder.Append("\\u");
+                            builder.Append(((int)letter).ToString("x4", System.Globalization.CultureInfo.InvariantCulture));
+                        }
+                        else
+                        {
+                            builder.Append(letter);
+                        }
+
+                        break;
+                }
+            }
+
+            builder.Append('"');
+            return builder.ToString();
         }
 
         if (value is char character)
@@ -1907,27 +2003,47 @@ public static class CodeGenerator
 
         var textValue = Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)
             ?? "default";
-        if (type == typeof(float))
+        if (Is(type, typeof(double)) || Is(type, typeof(float)))
+        {
+            var number = Convert.ToDouble(value, System.Globalization.CultureInfo.InvariantCulture);
+            var prefix = Is(type, typeof(float)) ? "float" : "double";
+            if (double.IsNaN(number))
+            {
+                return prefix + ".NaN";
+            }
+
+            if (double.IsPositiveInfinity(number))
+            {
+                return prefix + ".PositiveInfinity";
+            }
+
+            if (double.IsNegativeInfinity(number))
+            {
+                return prefix + ".NegativeInfinity";
+            }
+        }
+
+        if (Is(type, typeof(float)))
         {
             return textValue + "f";
         }
 
-        if (type == typeof(decimal))
+        if (Is(type, typeof(decimal)))
         {
             return textValue + "m";
         }
 
-        if (type == typeof(long))
+        if (Is(type, typeof(long)))
         {
             return textValue + "L";
         }
 
-        if (type == typeof(uint))
+        if (Is(type, typeof(uint)))
         {
             return textValue + "U";
         }
 
-        if (type == typeof(ulong))
+        if (Is(type, typeof(ulong)))
         {
             return textValue + "UL";
         }
@@ -1952,8 +2068,12 @@ public static class CodeGenerator
             return $"global::LuaLoom.LuaBinding.IsBoolean(L, {index})";
         }
 
+        if (Is(type, typeof(int)))
+        {
+            return $"global::LuaLoom.LuaBinding.IsIntegerInRange(L, {index}, int.MinValue, int.MaxValue)";
+        }
+
         if (Is(type, typeof(long))
-            || Is(type, typeof(int))
             || Is(type, typeof(short))
             || Is(type, typeof(byte))
             || Is(type, typeof(ushort))
@@ -2003,12 +2123,12 @@ public static class CodeGenerator
 
         if (Is(type, typeof(long)))
         {
-            return 80;
+            return 65;
         }
 
         if (Is(type, typeof(int)))
         {
-            return 70;
+            return 80;
         }
 
         if (Is(type, typeof(double)))
@@ -2297,7 +2417,7 @@ public static class CodeGenerator
         builder.AppendLine();
         builder.AppendLine($"    public {implementation}(global::LuaLoom.LuaTable table) => _table = table;");
 
-        if (type.GetEvents(BindingFlags.Public | BindingFlags.Instance | BindingFlags.FlattenHierarchy).Length > 0)
+        if (InterfaceEvents(type).Count > 0)
         {
             builder.AppendLine();
             builder.AppendLine("    private void CallEvent(string name, global::System.Delegate? value)");
@@ -2307,7 +2427,7 @@ public static class CodeGenerator
             builder.AppendLine("    }");
         }
 
-        foreach (var property in SupportedProperties(type, BindingFlags.Instance, forBinding: false))
+        foreach (var property in InterfaceProperties(type))
         {
             builder.AppendLine();
             builder.AppendLine($"    public {TypeRef(property.PropertyType)} {property.Name}");
@@ -2336,7 +2456,7 @@ public static class CodeGenerator
             builder.AppendLine("    }");
         }
 
-        foreach (var method in SupportedMethods(type, BindingFlags.Instance, forBinding: false))
+        foreach (var method in InterfaceMethods(type))
         {
             var parameters = method.GetParameters();
             var signature = string.Join(", ", parameters.Select(InterfaceParameterSignature));
@@ -2397,8 +2517,7 @@ public static class CodeGenerator
             builder.AppendLine("    }");
         }
 
-        foreach (var eventInfo in type.GetEvents(
-            BindingFlags.Public | BindingFlags.Instance | BindingFlags.FlattenHierarchy))
+        foreach (var eventInfo in InterfaceEvents(type))
         {
             builder.AppendLine();
             builder.AppendLine($"    public event {TypeRef(eventInfo.EventHandlerType!)} {eventInfo.Name}");
@@ -2493,13 +2612,21 @@ public static class CodeGenerator
         var supported = new List<MethodInfo>();
         foreach (var group in methods.GroupBy(static m => m.Name, StringComparer.Ordinal))
         {
-            var overloads = group.ToList();
-            if (overloads.Any(static m => IsObsolete(m) || !IsSupportedMethod(m)))
+            // 只丢掉不可用的单个重载，不因为同组里有一个 obsolete/不支持的成员就整组放弃
+            var usable = group
+                .Where(static m => !IsObsolete(m) && IsSupportedMethod(m))
+                .ToList();
+            if (usable.Count == 0)
             {
                 continue;
             }
 
-            supported.AddRange(overloads);
+            if (HasAmbiguousOverloads(usable))
+            {
+                continue;
+            }
+
+            supported.AddRange(usable);
         }
 
         return supported
@@ -2681,6 +2808,12 @@ public static class CodeGenerator
 
     private static bool IsSupportedMethod(MethodInfo method)
     {
+        var returnType = method.ReturnType;
+        if (returnType.IsByRef || returnType.IsPointer)
+        {
+            return false;
+        }
+
         foreach (var parameter in method.GetParameters())
         {
             if (parameter.ParameterType.IsByRef)
@@ -2809,7 +2942,9 @@ public static class CodeGenerator
 
     private static bool CanGenerateInterface(Type type)
     {
-        foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+        var closure = InterfaceClosure(type).ToList();
+
+        foreach (var method in closure.SelectMany(static t => t.GetMethods(BindingFlags.Public | BindingFlags.Instance)))
         {
             if (method.IsSpecialName)
             {
@@ -2822,10 +2957,34 @@ public static class CodeGenerator
             }
         }
 
-        foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        if (closure
+            .SelectMany(static t => t.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+            .Where(static m => !m.IsSpecialName)
+            .GroupBy(static m => MethodSignature(m), StringComparer.Ordinal)
+            .Any(static g => g.Select(static m => m.ReturnType).Distinct().Count() > 1))
         {
-            if (property.GetIndexParameters().Length > 0
-                || !IsSupportedParameter(property.PropertyType))
+            return false;
+        }
+
+        foreach (var property in closure.SelectMany(static t => t.GetProperties(BindingFlags.Public | BindingFlags.Instance)))
+        {
+            if (property.GetIndexParameters().Length > 0 || !IsSupportedParameter(property.PropertyType))
+            {
+                return false;
+            }
+        }
+
+        if (closure
+            .SelectMany(static t => t.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            .GroupBy(static p => p.Name, StringComparer.Ordinal)
+            .Any(static g => g.Select(static p => p.PropertyType).Distinct().Count() > 1))
+        {
+            return false;
+        }
+
+        foreach (var eventInfo in closure.SelectMany(static t => t.GetEvents(BindingFlags.Public | BindingFlags.Instance)))
+        {
+            if (eventInfo.EventHandlerType is null || !IsSupportedEventType(eventInfo.EventHandlerType))
             {
                 return false;
             }
@@ -2833,6 +2992,43 @@ public static class CodeGenerator
 
         return true;
     }
+
+    private static IEnumerable<Type> InterfaceClosure(Type type) => type.GetInterfaces().Append(type);
+
+    /// <summary>接口成员不会从基接口继承展开，这里按签名去重后取整个继承闭包的成员。</summary>
+    private static List<MethodInfo> InterfaceMethods(Type type) =>
+        InterfaceClosure(type)
+            .SelectMany(static t => SupportedMethods(t, BindingFlags.Instance, forBinding: false))
+            .GroupBy(static m => MethodSignature(m), StringComparer.Ordinal)
+            .Select(static g => g.First())
+            .ToList();
+
+    private static string MethodSignature(MethodInfo method)
+    {
+        var parameters = string.Join(
+            ",",
+            method.GetParameters().Select(static p => p.ParameterType.FullName ?? p.ParameterType.Name));
+        return $"{method.Name}`{method.GetGenericArguments().Length}({parameters})";
+    }
+
+    private static List<PropertyInfo> InterfaceProperties(Type type) =>
+        InterfaceClosure(type)
+            .SelectMany(static t => t.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            .Where(static p => p.GetIndexParameters().Length == 0)
+            .Where(static p => p.GetMethod is not null || p.SetMethod is not null)
+            .GroupBy(static p => p.Name, StringComparer.Ordinal)
+            .Select(static g => g.First())
+            .OrderBy(static p => p.Name, StringComparer.Ordinal)
+            .ToList();
+
+    private static List<EventInfo> InterfaceEvents(Type type) =>
+        InterfaceClosure(type)
+            .SelectMany(static t => t.GetEvents(BindingFlags.Public | BindingFlags.Instance))
+            .Where(static e => e.EventHandlerType is not null && IsSupportedEventType(e.EventHandlerType))
+            .GroupBy(static e => e.Name, StringComparer.Ordinal)
+            .Select(static g => g.First())
+            .OrderBy(static e => e.Name, StringComparer.Ordinal)
+            .ToList();
 
     private static bool HasComplexParameters(MethodInfo method) =>
         method.GetParameters().Any(static p =>
@@ -2848,6 +3044,24 @@ public static class CodeGenerator
         member is not null
         && member.GetCustomAttributesData()
             .Any(static attribute => attribute.AttributeType.FullName == typeof(ObsoleteAttribute).FullName);
+
+    private static bool HasAmbiguousOverloads(List<MethodInfo> overloads)
+    {
+        foreach (var group in overloads.GroupBy(static m => m.GetParameters().Length))
+        {
+            var ordered = group.OrderByDescending(Specificity).ToList();
+            for (var i = 0; i < ordered.Count - 1; i++)
+            {
+                // 前面的重载若不带类型条件（object、非基元 struct），会把后面的重载全部挡掉
+                if (BuildCondition(ordered[i], 1) == "true")
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
 
     private static bool IsSupportedParameter(Type type)
     {
@@ -2994,6 +3208,41 @@ public static class CodeGenerator
         if (Is(type, typeof(bool)))
         {
             return $"global::LuaLoom.LuaBinding.ReadBoolean(L, {index})";
+        }
+
+        if (Is(type, typeof(byte)))
+        {
+            return $"global::LuaLoom.LuaBinding.ReadByte(L, {index})";
+        }
+
+        if (Is(type, typeof(sbyte)))
+        {
+            return $"global::LuaLoom.LuaBinding.ReadSByte(L, {index})";
+        }
+
+        if (Is(type, typeof(short)))
+        {
+            return $"global::LuaLoom.LuaBinding.ReadShort(L, {index})";
+        }
+
+        if (Is(type, typeof(ushort)))
+        {
+            return $"global::LuaLoom.LuaBinding.ReadUShort(L, {index})";
+        }
+
+        if (Is(type, typeof(uint)))
+        {
+            return $"global::LuaLoom.LuaBinding.ReadUInt(L, {index})";
+        }
+
+        if (Is(type, typeof(ulong)))
+        {
+            return $"global::LuaLoom.LuaBinding.ReadULong(L, {index})";
+        }
+
+        if (Is(type, typeof(char)))
+        {
+            return $"global::LuaLoom.LuaBinding.ReadChar(L, {index})";
         }
 
         if (Is(type, typeof(string)))

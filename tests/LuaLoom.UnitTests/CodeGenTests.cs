@@ -41,6 +41,10 @@ public sealed class CodeGenTests
             "LuaLoom.UnitTests.Sample.ArraySurface",
             "LuaLoom.UnitTests.Sample.MathValue",
             "LuaLoom.UnitTests.Sample.Vec2",
+            "LuaLoom.UnitTests.Sample.NumericSurface",
+            "LuaLoom.UnitTests.Sample.DefaultSurface",
+            "LuaLoom.UnitTests.Sample.AmbiguousSurface",
+            "LuaLoom.UnitTests.Sample.PartialSurface",
         ],
         GenericMethods =
         [
@@ -69,6 +73,7 @@ public sealed class CodeGenTests
             "System.Action<int>",
             "System.Func<int, string>",
             "LuaLoom.UnitTests.Sample.Mapper<int, string>",
+            "LuaLoom.UnitTests.Sample.IDerivedSurface",
         ],
     };
 
@@ -481,7 +486,7 @@ public sealed class CodeGenTests
         Assert.Equal(0L, results[30]);
         Assert.Equal(true, results[31]);
         Assert.Equal("string", results[32]);
-        Assert.Equal("long", results[33]);
+        Assert.Equal("int", results[33]);
         Assert.Equal("object", results[34]);
         Assert.Equal(7L, results[35]);
         Assert.Equal(4L, results[36]);
@@ -876,6 +881,139 @@ public sealed class CodeGenTests
 
         Assert.Single(results);
         Assert.Null(results[0]);
+    }
+
+    [Fact]
+    public void Generated_ThunkExceptionBecomesLuaError()
+    {
+        var result = CodeGenerator.Generate(CreateConfig(typeof(Player).Assembly.Location), AppContext.BaseDirectory);
+        Assert.Empty(result.Diagnostics);
+
+        var compilation = CreateCompilation(result, "LuaLoom.Generated.Thunk.Tests");
+        using var stream = new MemoryStream();
+        var emit = compilation.Emit(stream);
+        Assert.True(
+            emit.Success,
+            string.Join(Environment.NewLine, emit.Diagnostics.Where(static d => d.Severity == DiagnosticSeverity.Error)));
+
+        stream.Position = 0;
+        var assembly = AssemblyLoadContext.Default.LoadFromStream(stream);
+        var register = assembly
+            .GetType("LuaLoom.Generated.LuaBindings", throwOnError: true)!
+            .GetMethod("Register", BindingFlags.Public | BindingFlags.Static)
+            ?? throw new InvalidOperationException("LuaBindings.Register was not generated.");
+
+        using var env = new LuaEnv(new LuaEnvOptions { StrictReflection = true });
+        register.Invoke(null, [env]);
+
+        // 参数类型不符与参数个数不符都必须变成脚本可捕获的 Lua 错误
+        var results = env.DoString("""
+            local okType, errType = pcall(function() return CS.LuaLoom.UnitTests.Sample.Player.Double('x') end)
+            local okArity, errArity = pcall(function() return CS.LuaLoom.UnitTests.Sample.Player.Double() end)
+            return okType, tostring(errType), okArity, tostring(errArity)
+            """);
+
+        Assert.Equal(false, results[0]);
+        Assert.Contains("Cannot convert", (string)results[1]!, StringComparison.Ordinal);
+        Assert.Equal(false, results[2]);
+        Assert.Contains("No matching overload", (string)results[3]!, StringComparison.Ordinal);
+        Assert.Equal(2L, env.DoString("return 1 + 1")[0]);
+    }
+
+    [Fact]
+    public void Generated_HandlesInheritedInterfacesPrimitiveMembersAndDefaults()
+    {
+        var result = CodeGenerator.Generate(CreateConfig(typeof(Player).Assembly.Location), AppContext.BaseDirectory);
+        Assert.Empty(result.Diagnostics);
+
+        var compilation = CreateCompilation(result, "LuaLoom.Generated.Surface.Tests");
+        using var stream = new MemoryStream();
+        var emit = compilation.Emit(stream);
+        Assert.True(
+            emit.Success,
+            string.Join(Environment.NewLine, emit.Diagnostics.Where(static d => d.Severity == DiagnosticSeverity.Error)));
+
+        stream.Position = 0;
+        var assembly = AssemblyLoadContext.Default.LoadFromStream(stream);
+        var register = assembly
+            .GetType("LuaLoom.Generated.LuaBindings", throwOnError: true)!
+            .GetMethod("Register", BindingFlags.Public | BindingFlags.Static)
+            ?? throw new InvalidOperationException("LuaBindings.Register was not generated.");
+
+        using var env = new LuaEnv(new LuaEnvOptions { StrictReflection = true });
+        register.Invoke(null, [env]);
+
+        var results = env.DoString("""
+            local numeric = CS.LuaLoom.UnitTests.Sample.NumericSurface()
+            numeric.ByteValue = 7
+            numeric.SByteValue = -3
+            numeric.ShortValue = 300
+            numeric.UShortValue = 60000
+            numeric.UIntValue = 4000000000
+            numeric.ULongValue = 7
+            numeric.Letter = 'A'
+            return numeric.ByteValue, numeric.SByteValue, numeric.ShortValue, numeric.UShortValue,
+                   numeric.UIntValue, numeric.ULongValue, numeric.Letter,
+                   CS.LuaLoom.UnitTests.Sample.DefaultSurface.WithNewline(),
+                   CS.LuaLoom.UnitTests.Sample.DefaultSurface.WithBig(),
+                   CS.LuaLoom.UnitTests.Sample.DefaultSurface.WithNaN(),
+                   CS.LuaLoom.UnitTests.Sample.Overloads.Pick(1),
+                   CS.LuaLoom.UnitTests.Sample.Overloads.Pick(4000000000),
+                   CS.LuaLoom.UnitTests.Sample.PartialSurface.Stable(5)
+            """);
+
+        Assert.Equal(7L, results[0]);
+        Assert.Equal(-3L, results[1]);
+        Assert.Equal(300L, results[2]);
+        Assert.Equal(60000L, results[3]);
+        Assert.Equal(4000000000L, results[4]);
+        Assert.Equal(7L, results[5]);
+        Assert.Equal("A", results[6]);
+        Assert.Equal("line1\nline2", results[7]);
+        Assert.Equal(-1L, results[8]);
+        Assert.True(double.IsNaN((double)results[9]!));
+        Assert.Equal("int", results[10]);
+        Assert.Equal("long", results[11]);
+        Assert.Equal(5L, results[12]);
+
+        using var table = (LuaTable)env.DoString("""
+            local impl = { value = 0 }
+            function impl:Increment(value) return value + 1 end
+            function impl:BaseValue() return 9 end
+            return impl
+            """)[0]!;
+
+        var surface = table.Cast<IDerivedSurface>();
+        Assert.Equal(5, surface.Increment(4));
+        Assert.Equal(9, surface.BaseValue());
+    }
+
+    [Fact]
+    public void Generate_SkipsOverloadGroupsItCannotDispatch()
+    {
+        var result = CodeGenerator.Generate(CreateConfig(typeof(Player).Assembly.Location), AppContext.BaseDirectory);
+        Assert.Empty(result.Diagnostics);
+
+        var binder = Assert.Single(
+            result.Files,
+            static file => file.FileName.Contains("AmbiguousSurface", StringComparison.Ordinal));
+
+        Assert.DoesNotContain("Use", binder.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Generate_SkipsUnsupportedOverloadsIndividually()
+    {
+        var result = CodeGenerator.Generate(CreateConfig(typeof(Player).Assembly.Location), AppContext.BaseDirectory);
+        Assert.Empty(result.Diagnostics);
+
+        var binder = Assert.Single(
+            result.Files,
+            static file => file.FileName.Contains("PartialSurface", StringComparison.Ordinal));
+
+        Assert.Contains("Stable", binder.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("RefReturn", binder.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("List", binder.Content, StringComparison.Ordinal);
     }
 
     private static CSharpCompilation CreateCompilation(GenerationResult result, string assemblyName)

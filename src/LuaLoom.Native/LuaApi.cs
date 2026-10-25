@@ -79,7 +79,7 @@ internal static class LuaApi
     internal static extern void lua_pushnumber(IntPtr L, double value);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern IntPtr lua_pushstring(IntPtr L, string? value);
+    internal static extern IntPtr lua_pushstring(IntPtr L, [MarshalAs(UnmanagedType.LPUTF8Str)] string? value);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr lua_pushlstring(IntPtr L, byte[] value, nuint length);
@@ -106,10 +106,10 @@ internal static class LuaApi
     internal static extern void lua_createtable(IntPtr L, int arraySize, int recordSize);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int lua_getfield(IntPtr L, int index, string key);
+    internal static extern int lua_getfield(IntPtr L, int index, [MarshalAs(UnmanagedType.LPUTF8Str)] string key);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void lua_setfield(IntPtr L, int index, string key);
+    internal static extern void lua_setfield(IntPtr L, int index, [MarshalAs(UnmanagedType.LPUTF8Str)] string key);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int lua_rawgeti(IntPtr L, int index, long key);
@@ -118,10 +118,10 @@ internal static class LuaApi
     internal static extern void lua_rawseti(IntPtr L, int index, long key);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int lua_getglobal(IntPtr L, string name);
+    internal static extern int lua_getglobal(IntPtr L, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void lua_setglobal(IntPtr L, string name);
+    internal static extern void lua_setglobal(IntPtr L, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int lua_next(IntPtr L, int index);
@@ -133,13 +133,22 @@ internal static class LuaApi
     internal static extern int lua_getmetatable(IntPtr L, int index);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int luaL_loadbufferx(IntPtr L, byte[] buffer, nuint size, string chunkName, string? mode);
+    internal static extern int luaL_loadbufferx(
+        IntPtr L,
+        byte[] buffer,
+        nuint size,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string chunkName,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? mode);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr lua_setupvalue(IntPtr L, int funcindex, int n);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void luaL_traceback(IntPtr L, IntPtr levelState, string? message, int level);
+    internal static extern void luaL_traceback(
+        IntPtr L,
+        IntPtr levelState,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? message,
+        int level);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int lua_pcallk(
@@ -163,10 +172,10 @@ internal static class LuaApi
     internal static extern int lua_gc(IntPtr L, int what, int data);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int luaL_newmetatable(IntPtr L, string name);
+    internal static extern int luaL_newmetatable(IntPtr L, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern void luaL_setmetatable(IntPtr L, string name);
+    internal static extern void luaL_setmetatable(IntPtr L, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int lua_gettable(IntPtr L, int index);

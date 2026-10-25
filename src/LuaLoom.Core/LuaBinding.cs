@@ -10,6 +10,9 @@ namespace LuaLoom;
 /// </summary>
 public static class LuaBinding
 {
+    private static readonly LuaCSFunction ThunkCallback = OnThunk;
+    private static readonly IntPtr ThunkPointer = NativeMarshal.GetFunctionPointerForDelegate(ThunkCallback);
+
     public static void PushNil(IntPtr state) => LuaApi.lua_pushnil(state);
 
     public static void PushInt(IntPtr state, int value) => LuaApi.lua_pushinteger(state, value);
@@ -31,8 +34,9 @@ public static class LuaBinding
     public static void PushFunction(IntPtr state, LuaCSFunction function)
     {
         ArgumentNullException.ThrowIfNull(function);
-        var pointer = NativeMarshal.GetFunctionPointerForDelegate(function);
-        LuaApi.lua_pushcclosure(state, pointer, 0);
+        var marshal = LuaMarshalRegistry.Get(state);
+        LuaApi.lua_pushinteger(state, marshal.AddThunk(function));
+        LuaApi.lua_pushcclosure(state, ThunkPointer, 1);
     }
 
     /// <summary>当前栈顶索引；生成代码用它判断实参个数。</summary>
@@ -41,6 +45,35 @@ public static class LuaBinding
     public static int ReadInt(IntPtr state, int index) => checked((int)ReadInteger(state, index));
 
     public static long ReadLong(IntPtr state, int index) => ReadInteger(state, index);
+
+    public static byte ReadByte(IntPtr state, int index) => checked((byte)ReadInteger(state, index));
+
+    public static sbyte ReadSByte(IntPtr state, int index) => checked((sbyte)ReadInteger(state, index));
+
+    public static short ReadShort(IntPtr state, int index) => checked((short)ReadInteger(state, index));
+
+    public static ushort ReadUShort(IntPtr state, int index) => checked((ushort)ReadInteger(state, index));
+
+    public static uint ReadUInt(IntPtr state, int index) => checked((uint)ReadInteger(state, index));
+
+    public static ulong ReadULong(IntPtr state, int index) => unchecked((ulong)ReadInteger(state, index));
+
+    /// <summary>char 既接受单字符字符串（与 push 语义对称），也接受整数码点。</summary>
+    public static char ReadChar(IntPtr state, int index)
+    {
+        if (LuaApi.lua_type(state, index) == LuaApi.LuaTString)
+        {
+            var text = ReadString(state, index);
+            if (text is { Length: 1 })
+            {
+                return text[0];
+            }
+
+            throw new LuaConversionException("char", $"string of length {text?.Length ?? 0}", index);
+        }
+
+        return checked((char)ReadInteger(state, index));
+    }
 
     public static double ReadDouble(IntPtr state, int index)
     {
@@ -162,6 +195,18 @@ public static class LuaBinding
         return isInteger != 0;
     }
 
+    /// <summary>判断栈上的值是否为落在 [minimum, maximum] 内的整数；供生成代码做重载分派。</summary>
+    public static bool IsIntegerInRange(IntPtr state, int index, long minimum, long maximum)
+    {
+        if (LuaApi.lua_type(state, index) != LuaApi.LuaTNumber)
+        {
+            return false;
+        }
+
+        var value = LuaApi.lua_tointegerx(state, index, out var isInteger);
+        return isInteger != 0 && value >= minimum && value <= maximum;
+    }
+
     public static bool IsString(IntPtr state, int index) =>
         LuaApi.lua_type(state, index) == LuaApi.LuaTString;
 
@@ -189,6 +234,31 @@ public static class LuaBinding
         || typeof(LuaReference).IsAssignableFrom(type)
         || typeof(Delegate).IsAssignableFrom(type)
         || type.IsInterface;
+
+    /// <summary>
+    /// 生成代码的方法入口统一经此跳板：托管异常转成 Lua 错误（脚本 <c>pcall</c> 可捕获），
+    /// 而不是穿过原生栈帧抛到宿主调用方。委托由 <see cref="LuaMarshal.AddThunk"/> 保持存活。
+    /// </summary>
+    private static int OnThunk(IntPtr state)
+    {
+        var id = checked((int)LuaApi.lua_tointegerx(state, LuaApi.Profile.RegistryIndex - 1, out _));
+        var thunk = LuaMarshalRegistry.Get(state).GetThunk(id);
+        if (thunk is null)
+        {
+            LuaApi.lua_pushstring(state, "LuaLoom: generated thunk is not registered.");
+            return LuaApi.lua_error(state);
+        }
+
+        try
+        {
+            return thunk(state);
+        }
+        catch (Exception exception)
+        {
+            LuaApi.lua_pushstring(state, exception.Message);
+            return LuaApi.lua_error(state);
+        }
+    }
 
     private static long ReadInteger(IntPtr state, int index)
     {

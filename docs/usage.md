@@ -108,9 +108,9 @@ local max = uint64.parse('18446744073709551615')      -- 无符号 64 位
 local box = xlua.get_generic_method(CS.MyGame.Utils, 'Convert')
 ```
 
-生成绑定覆盖热点成员、`ref`/`out`/`params`、默认值参数及其混合重载组、一维/矩形数组（含类元素）、事件、操作符、接口事件与无约束泛型方法；`genericMethods` 可显式生成闭合泛型方法，`Cast<T>`、`BlackList`、`DoNotGen`、`ReflectionUse`、`GCOptimize` 也已接入配置。未生成的成员（未配置基类、未列出的泛型实例、带约束的泛型接口方法等）会自动回落到反射。绑定自己返回 `nil` 的成员不会被误判为「未处理」。派生类只生成自身成员；直接基类也需要加入 `luaCallCSharp` 才会生成继承成员。非字符串键索引器由生成绑定优先处理。扩展方法所在的静态类需要加入 `luaCallCSharp`，生成的注册代码会调用 `RegisterExtensionType`；未配置的扩展方法不可见。需要验证生成覆盖时开启 `StrictReflection = true`，再用 `lua-loom-gen generate --coverage` 查看未生成原因。
+生成绑定覆盖热点成员、`ref`/`out`/`params`、默认值参数及其混合重载组、一维/矩形数组（含类元素）、事件、操作符、接口事件与无约束泛型方法；`genericMethods` 可显式生成闭合泛型方法，`Cast<T>`、`BlackList`、`DoNotGen`、`ReflectionUse`、`GCOptimize` 也已接入配置。未生成的成员（未配置基类、未列出的泛型实例、带约束的泛型接口方法等）会自动回落到反射。绑定自己返回 `nil` 的成员不会被误判为「未处理」。派生类只生成自身成员；直接基类也需要加入 `luaCallCSharp` 才会生成继承成员。非字符串键索引器由生成绑定优先处理。扩展方法所在的静态类需要加入 `luaCallCSharp`，生成的注册代码会调用 `RegisterExtensionType`；未配置的扩展方法不可见。需要验证生成覆盖时开启 `StrictReflection = true`，再用 `dotnet run --project src/LuaLoom.Cli -c Release -- generate --config lua-loom.json --coverage` 查看未生成原因。
 
-同名重载由反射按参数类型评分：精确类型优先，其次可转换类型；生成器对常见类型（字符串、布尔、整数、数值、userdata、`object`）生成类型条件分派，默认值参数按实参个数补齐，复杂参数组也走同一套动态 arity 分派；只有未配置或生成器不支持的类型才回退反射。
+同名重载由反射按参数类型评分：精确类型优先，其次可转换类型；生成器对常见类型（字符串、布尔、整数、数值、userdata、`object`）生成类型条件分派，`int` 与 `long` 并存时按取值范围选择，默认值参数按实参个数补齐，复杂参数组也走同一套动态 arity 分派；只有未配置或生成器不支持的类型才回退反射。
 
 ## 5. delegate 与 interface
 
@@ -128,8 +128,8 @@ var callback = env.Global.Get<IntCallback>("callback");
 using var fn = (LuaFunction)env.DoString("return function(a) ... end")[0]!;
 using var co = fn.CreateCoroutine();
 
-var first = co.Resume(1);        // 返回 yield 的值
-var last = co.Resume(5);         // 返回 return 的值
+var first = co.Resume(1);        // 返回 object[]：yield 的值
+var last = co.Resume(5);         // 返回 object[]：return 的值
 ```
 
 `LuaCoroutine.Status` 为 `Suspended` 或 `Dead`；对已结束的协程再 `Resume` 抛 `InvalidOperationException`。
@@ -149,7 +149,7 @@ var memory = env.MemorySnapshot(top: 10);
 
 ## 8. 线程与生命周期
 
-- 虚拟机与所有句柄都是单线程的：跨线程调用抛 `InvalidOperationException`，`Dispose` 也一样。
+- 虚拟机与句柄都是单线程的。`LuaEnv` 的公共入口与句柄的读写成员在跨线程调用时抛 `InvalidOperationException`；句柄的 `Dispose` 不做线程检查，必须在创建环境的线程调用。
 - 句柄实现 `IDisposable`，建议 `using`；漏掉的由终结器入队，调用 `env.Tick()` 在宿主线程回收。
 - 句柄释放后使用抛 `ObjectDisposedException`；环境释放后使用任何句柄同样抛该异常。
 
