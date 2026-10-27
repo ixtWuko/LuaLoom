@@ -102,6 +102,15 @@ public sealed partial class LuaEnv
     public void RegisterGenericMethod(Type type, string methodName, Type[] typeArguments, LuaCSFunction handler);
     public void RegisterExtensionType(Type extensionType);
     public void RegisterExtensionMethod(Type targetType, string name, LuaCSFunction handler);
+    public void MakePrivateAccessible(Type type);          // xlua.private_accessible 的实现
+}
+
+// 生成事件绑定用的订阅表：对象、事件名、Lua 函数指针到委托的映射
+public static class LuaEventBridge
+{
+    public static void Add(object instance, string eventName, IntPtr pointer, Delegate handler, LuaFunction function);
+    public static Delegate? Remove(object instance, string eventName, IntPtr pointer);
+    public static Delegate? Take(object instance, string eventName, IntPtr pointer);
 }
 ```
 
@@ -129,7 +138,7 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 | `TargetInvocationException` | 反射兜底调用的 C# 方法自身抛异常 | 包装成 Lua 错误供脚本捕获；穿越回 C# 时呈现为 `LuaException` |
 | `InvalidOperationException` | 句柄属于其他环境 | 跨环境混用，调用方缺陷 |
 
-**界面**：无界面，无界面状态。
+**界面**：无界面，无界面状态。对外暴露 `LuaTable.Cast<T>`（`partial` 补充）、`ILuaDelegateInvoker`、`LuaTypeBinding`、`LuaEventBridge`、`LuaInterfaceProxy` 与 `LuaEnv` 上的注册成员，其余类型 `internal`。
 
 ## 具体实现细节
 
@@ -189,9 +198,9 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 - 绑定只提供部分 thunk 时（例如没有生成 `__call`），缺失的入口回落到反射实现，不会留下一张调不通的类表。
 - 绑定 thunk 的「未处理」约定：`Call` / `StaticIndex` / `InstanceIndex` 返回 0 且不压栈；`StaticNewIndex` / `InstanceNewIndex` 压入 `nil` 并返回 1。返回值本身是 `nil` 时必须返回 1，否则会被误判为未处理并触发回落。
 - 反射调用按参数形状装配：普通参数与 `ref` 消耗实参，`out` 不消耗，`params` 把剩余实参打包成数组；调用后依次返回方法返回值、`ref` 与 `out`。生成绑定对单方法与混合重载组都执行同一规则；未配置或无法生成的成员才回落到反射。
-- M005 接入前，`CS.*` 与成员访问全部走反射；`RegisterType` 已就位，生成的绑定在 M005 里优先于反射使用。
+- M005 的生成绑定通过 `RegisterType` 注册，命中时优先于反射执行；未注册的类型与成员继续走反射路径。
 - `LuaInterfaceProxy` 必须是 `public`：`DispatchProxy` 在运行期生成子类，代理类型要能从动态程序集访问；它只作兜底。
-- 事件委托用表达式树现场生成（`LuaEventDelegateFactory`），只服务事件；`Get<TDelegate>` 仍要求生成代码。
+- 事件委托用表达式树现场生成（`internal` 的 `LuaEventDelegateFactory`），只服务事件；`Get<TDelegate>` 仍要求生成代码。
 - 数组与 `List<T>` 的读取对 `int`/`long`/`double`/`float`/`bool`/`string` 走专用循环，不产生逐元素装箱；其他元素类型回落到逐项转换。
 
 **资源**：无外部资源；生成的 invoker 与类型绑定在示例调用 `LuaBindings.Register(env)` 时注册进当前环境的缓存，不使用程序集级全局注册。
@@ -211,7 +220,7 @@ env.DoString("local p = CS.Sample.Player(1); p.Hp = 10", "init");
 | 未生成的 delegate 类型 | `Get<Action<int>>` | 抛 `LuaConversionException`，提示配置 |
 | 同名重载 `Foo(int)` 与 `Foo(string, out int)` | Lua 传 `"abc"` | 选中可装配的 `Foo(string, out int)` |
 | 重载 `Pick(string)` 与 `Pick(object)` | Lua 传 `'x'` | 选中 `Pick(string)` |
-| 重载 `Pick(int)` 与 `Pick(long)` | Lua 传 `1` | 选中 `Pick(long)` |
+| 重载 `Pick(int)` 与 `Pick(long)` | Lua 传 `1` / 传 `4000000000` | 选中 `Pick(int)` / 选中 `Pick(long)` |
 | 单参数带默认值 | `Optional()` | 返回默认值 `7` |
 | 扩展方法 `Triple(this Player, int)` | `p:Triple(2)` | 返回 `p.Hp * 2`；生成注册优先 |
 | 绑定的非字符串索引器 | `bag[1] = 5; return bag[1]` | 走 `InstanceIndexer`/`InstanceIndexerSet` |

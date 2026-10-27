@@ -16,7 +16,7 @@ var sum = env.DoString("return 1 + 1")[0];
 
 | 选项 | 默认 | 说明 |
 | :-- | :-- | :-- |
-| `SearchPaths` | `["?.lua"]` | 初始 `package.path` |
+| `SearchPaths` | `["?.lua"]` | 初始 `package.path`；传空数组则保持 Lua 默认值 |
 | `LibraryLoader` | `NativeLibraryLoader` | 原生库加载器 |
 | `Logger` | 无 | `LogLevel` + 消息 |
 | `EnableReflectionFallback` | `true` | 未注册类型是否走反射 |
@@ -39,6 +39,7 @@ env.DoString("require 'main'", "bootstrap");
 
 - `DoString` 返回 `object[]`，无返回值时是空数组。
 - `LoadString` 只编译不执行，返回 `LuaFunction`。
+- `LoadString<T>` 会执行一次代码块并把结果转成 `T`，delegate 也走这条路径；等价于 `LoadString` 后 `Call()` 再转换，适合把脚本直接取成回调。
 - loader 返回 `null` 表示未命中；全部未命中时 `require` 抛 `LuaException`。
 
 ## 3. C# 调用 Lua
@@ -125,11 +126,16 @@ var callback = env.Global.Get<IntCallback>("callback");
 ## 6. 协程
 
 ```csharp
-using var fn = (LuaFunction)env.DoString("return function(a) ... end")[0]!;
+using var fn = (LuaFunction)env.DoString("""
+    return function(a)
+        local b = coroutine.yield(a + 1)
+        return b * 2
+    end
+    """)[0]!;
 using var co = fn.CreateCoroutine();
 
-var first = co.Resume(1);        // 返回 object[]：yield 的值
-var last = co.Resume(5);         // 返回 object[]：return 的值
+var first = co.Resume(1);        // [2]：yield 的值
+var last = co.Resume(5);         // [10]：return 的值
 ```
 
 `LuaCoroutine.Status` 为 `Suspended` 或 `Dead`；对已结束的协程再 `Resume` 抛 `InvalidOperationException`。
@@ -149,7 +155,7 @@ var memory = env.MemorySnapshot(top: 10);
 
 ## 8. 线程与生命周期
 
-- 虚拟机与句柄都是单线程的。`LuaEnv` 的公共入口与句柄的读写成员在跨线程调用时抛 `InvalidOperationException`；句柄的 `Dispose` 在其它线程调用时不直接改 Lua 状态，而是把释放排到 `Tick()` 执行。
+- 虚拟机与句柄都是单线程的。`LuaEnv` 的公共入口与句柄的读写成员在跨线程调用时抛 `InvalidOperationException`；`LuaReference` 句柄（表、函数）的 `Dispose` 在其它线程调用时不直接改 Lua 状态，而是把释放排到 `Tick()` 执行。协程句柄不做这种排队，必须与 `LuaEnv` 在同一线程释放。
 - 句柄实现 `IDisposable`，建议 `using`；漏掉的由终结器入队，调用 `env.Tick()` 在宿主线程回收。
 - 句柄释放后使用抛 `ObjectDisposedException`；环境释放后使用任何句柄同样抛该异常。
 
@@ -160,5 +166,7 @@ var memory = env.MemorySnapshot(top: 10);
 | `LuaException` | 脚本编译或运行错误；带 `Status`、`ChunkName`、`Line`、`Traceback` |
 | `LuaConversionException` | Lua 值与目标类型不兼容 |
 | `LuaLibraryNotFoundException` | 原生库加载失败 |
+| `NotSupportedException` | 含引用字段的 struct、未注册且无自定义 marshaler 的类型 |
+| `ArgumentException` | 传入空路径（`GetInPath`）、零状态指针等调用参数缺陷 |
 | `ObjectDisposedException` | 环境或句柄已释放 |
 | `InvalidOperationException` | 跨线程调用、协程已结束、诊断重复启动 |

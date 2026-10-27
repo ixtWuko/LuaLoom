@@ -21,14 +21,14 @@
 | :-- | :-- | :-- |
 | E1 | `StartProfile` 后执行 1 万次函数调用，`StopProfile` 报告的调用次数与预期一致（误差 ≤ 1%） | 用例中固定循环次数 |
 | E2 | 报告含函数名、调用次数、总时长、平均时长与占比 | 逐列检查 |
-| E3 | 关闭采集后再次执行业务，`StopProfile` 抛 `InvalidOperationException` | 断言异常 |
+| E3 | 采集关闭后再调用 `StopProfile` 抛 `InvalidOperationException` | 断言异常 |
 | E4 | `MemorySnapshot` 输出含表名、估算字节数、类型（`GLOBAL`/`REGISTRY`）、稳定的对象标识 | 逐列检查，标识在未重建时保持不变 |
 | E5 | 循环往同一张表插入 1 万个元素，快照中该表尺寸单调增长 | 两次快照对比 |
 | E6 | 采集期间脚本报错，`StopProfile` 仍能返回已采集数据 | 触发错误后取报告 |
 
 **非目标**
 
-- 采样式分析（P0 用 hook 计数）。
+- 采样式分析（当前用 hook 计数）。
 - 与 C# profiler 的调用栈对齐。
 - 自动泄漏判定（只呈现数据，不定性）。
 
@@ -64,11 +64,11 @@ var memory = env.MemorySnapshot(top: 10);
 
 | 异常 | 触发条件 | 调用方处理 |
 | :-- | :-- | :-- |
-| `InvalidOperationException` | 重复 `StartProfile`、未开始就 `StopProfile` | 修正调用时序 |
+| `InvalidOperationException` | 重复 `StartProfile`、未开始就 `StopProfile`、嵌入资源缺失或模块未返回表 | 修正调用时序，或检查构建产物是否包含诊断资源 |
 | `ObjectDisposedException` | 环境已释放 | 调用方缺陷 |
 | `LuaException` | 诊断脚本本身执行失败 | 视为缺陷，上报 |
 
-**界面**：无 GUI；报告为等宽文本，列之间用两个空格分隔。
+**界面**：无 GUI；报告为等宽文本，列之间用两个空格分隔。对外暴露 `LuaEnv` 的 `StartProfile` / `StopProfile` / `MemorySnapshot` 与 `ProfileSort`，其余类型 `internal`。
 
 ## 具体实现细节
 
@@ -94,7 +94,7 @@ C# 侧状态（挂在 `LuaEnv` 上）：
 
 **算法**
 
-1. 首次调用诊断接口时，从嵌入资源加载 `profiler.lua` / `memory.lua`，编译并缓存为 `LuaFunction`；加载失败抛 `LuaException`。
+1. 首次调用诊断接口时，从嵌入资源加载 `profiler.lua` / `memory.lua`，执行后把返回的模块表缓存为 `LuaTable`（`_profiler`、`_memory`），每次调用再从模块表里取 `start` / `stop` / `snapshot` 函数；资源缺失或模块没返回表时抛 `InvalidOperationException`，模块里缺对应函数时抛 `LuaException`。
 2. `StartProfile`：注册 `lua_loom_clock`（基于 `Stopwatch` 的高分辨率时钟），调用 `profiler.start()`，内部用 `debug.sethook` 注册 `call`/`return` 钩子，按函数累计耗时与次数；匿名函数用 `源文件:行号` 代替函数名，profiler 自身的帧被过滤。
 3. `StopProfile`：调用 `profiler.stop(sort)`，卸载 hook，返回格式化字符串；未开始时抛异常。
 4. `MemorySnapshot`：调用 `memory.snapshot(top)`，遍历 `_G` 与 `debug.getregistry()`，用 `#table` 与键值递归估算尺寸，按字节数降序取前 N 项。
@@ -106,7 +106,7 @@ C# 侧状态（挂在 `LuaEnv` 上）：
 
 **接口契约与错误传播**
 
-- 诊断脚本以嵌入资源随 `LuaLoom.Core` 发布，路径固定 `Diagnostics/profiler.lua`、`Diagnostics/memory.lua`。
+- 诊断脚本以嵌入资源随 `LuaLoom.Core` 发布，源文件固定为 `Diagnostics/profiler.lua`、`Diagnostics/memory.lua`，嵌入资源名为 `LuaLoom.Diagnostics.profiler.lua`、`LuaLoom.Diagnostics.memory.lua`。
 - 报告只包含函数名、调用次数、总时长、平均时长与占比，不输出内部指针或环境地址。
 - 采集期间发生的 Lua 错误不影响报告生成；`StopProfile` 内部用 `pcall` 调用采集脚本，失败时抛 `LuaException` 并保留原始消息。
 
@@ -126,4 +126,4 @@ C# 侧状态（挂在 `LuaEnv` 上）：
 | 关掉采集后跑 10 万次调用 | 计时对比开启前后 | 关闭后耗时回到基线量级 |
 | 环境已释放 | 调用诊断接口 | 抛 `ObjectDisposedException` |
 
-异常覆盖四类：空与边界（空环境、无采集数据）、非法输入（重复开始、未开始即结束）、依赖失败（嵌入脚本缺失、hook 安装失败）、重复与并发（采集期间重入、跨线程调用诊断接口）。
+异常覆盖四类：空与边界（空环境、无采集数据）、非法输入（重复开始、未开始即结束）、依赖失败（嵌入资源缺失后的上报表、hook 安装失败；前者需要构造缺资源的构建产物，当前未纳入自动化用例）、重复与并发（采集期间重入、跨线程调用诊断接口）。

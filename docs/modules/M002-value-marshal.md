@@ -73,24 +73,61 @@ public sealed class LuaFunction : LuaReference
 ```csharp
 public static class LuaBinding            // 生成代码调用面，参数索引从 1 开始
 {
-    public static void PushInt(IntPtr L, int value);
-    public static void PushLong(IntPtr L, long value);
-    public static void PushDouble(IntPtr L, double value);
-    public static void PushBoolean(IntPtr L, bool value);
-    public static void PushString(IntPtr L, string? value);
-    public static int ReadInt(IntPtr L, int index);
-    public static long ReadLong(IntPtr L, int index);
-    public static double ReadDouble(IntPtr L, int index);
-    public static string? ReadString(IntPtr L, int index);
-    public static bool ReadBoolean(IntPtr L, int index);
-    public static void PushNil(IntPtr L);
-    public static void PushObject(IntPtr L, object? value);
-    public static object? ReadObject(IntPtr L, int index);
-    public static void PushStruct<T>(IntPtr L, T value) where T : struct;
-    public static T ReadStruct<T>(IntPtr L, int index) where T : struct;
-    public static void Throw(IntPtr L, string message);       // 抛出后由 thunk 转成 Lua 错误
+    // 压栈
+    public static void PushNil(IntPtr state);
+    public static void PushInt(IntPtr state, int value);
+    public static void PushLong(IntPtr state, long value);
+    public static void PushDouble(IntPtr state, double value);
+    public static void PushBoolean(IntPtr state, bool value);
+    public static void PushString(IntPtr state, string? value);
+    public static void PushObject(IntPtr state, object? value);
+    public static void PushStruct<T>(IntPtr state, T value) where T : struct;
+    public static void PushFunction(IntPtr state, LuaCSFunction function);
+    public static void PushArray<T>(IntPtr state, T[]? values);
+    public static void PushArray(IntPtr state, Array? values);
+
+    // 读栈
+    public static int GetTop(IntPtr state);
+    public static int ReadInt(IntPtr state, int index);
+    public static long ReadLong(IntPtr state, int index);
+    public static byte ReadByte(IntPtr state, int index);
+    public static sbyte ReadSByte(IntPtr state, int index);
+    public static short ReadShort(IntPtr state, int index);
+    public static ushort ReadUShort(IntPtr state, int index);
+    public static uint ReadUInt(IntPtr state, int index);
+    public static ulong ReadULong(IntPtr state, int index);
+    public static char ReadChar(IntPtr state, int index);
+    public static float ReadFloat(IntPtr state, int index);
+    public static double ReadDouble(IntPtr state, int index);
+    public static bool ReadBoolean(IntPtr state, int index);
+    public static string? ReadString(IntPtr state, int index);
+    public static object? ReadObject(IntPtr state, int index);
+    public static T ReadObjectAs<T>(IntPtr state, int index);   // 含 userdata、table 转换与桥接读取
+    public static T[] ReadArray<T>(IntPtr state, int index);
+    public static T ReadStruct<T>(IntPtr state, int index) where T : struct;
+    public static T ConvertObject<T>(object? value);
+
+    // 句柄
+    public static LuaFunction CreateFunction(IntPtr state, int index);
+    public static IntPtr GetFunctionPointer(IntPtr state, int index);
+
+    // 重载分派用的类型判断
+    public static bool IsNil(IntPtr state, int index);
+    public static bool IsBoolean(IntPtr state, int index);
+    public static bool IsNumber(IntPtr state, int index);
+    public static bool IsInteger(IntPtr state, int index);
+    public static bool IsIntegerInRange(IntPtr state, int index, long minimum, long maximum);
+    public static bool IsString(IntPtr state, int index);
+    public static bool IsTable(IntPtr state, int index);
+    public static bool IsFunction(IntPtr state, int index);
+    public static bool IsUserdataOfType<T>(IntPtr state, int index);
+
+    // 抛错：由 thunk 转成 Lua 错误
+    public static void Throw(IntPtr state, string message);
 }
 ```
+
+上表是全部 42 个公共原语，新增成员必须同步登记。`LuaBinding` 自身不做栈守卫，调用方是核心的 `LuaCSFunction` thunk（见 M005）。`ReadInt` / `ReadByte` 等窄类型读取做范围检查，越界抛 `LuaConversionException`；`ReadString` 接受 string 与 number（按 `tostring` 语义），`ReadBoolean` 按 Lua 真值语义。
 
 **调用顺序（生成代码视角）**
 
@@ -114,7 +151,7 @@ static int Player_Sum(IntPtr L)
 | `ObjectDisposedException` | 使用已释放的引用 id | 调用方缺陷 |
 | `InvalidOperationException` | 引用 id 不属于当前环境 | 跨环境混用，调用方缺陷 |
 
-**界面**：无界面。对外暴露句柄类型 `LuaReference`/`LuaTable`/`LuaFunction`、`ITypeMarshaler` 与生成代码专用的 `LuaBinding`，其余类型 `internal`。
+**界面**：无界面。对外暴露句柄类型 `LuaReference`/`LuaTable`/`LuaFunction`、`ITypeMarshaler`、异常类型 `LuaConversionException`，以及生成代码专用的 `LuaBinding`，其余类型 `internal`。
 
 ## 具体实现细节
 
@@ -134,6 +171,8 @@ id 的复用交给 `luaL_ref` 自带的空闲链，不再维护第二套。
 | :-- | :-- | :-- |
 | `_objectIds` | `Dictionary<object,int>`（`ReferenceEqualityComparer`） | 对象到 id |
 | `_objects` | `List<object?>` | id 到对象，`__gc` 后置空 |
+| `_freeObjectIds` | `Stack<int>` | 已回收的对象 id，push 时优先复用 |
+| `_objectGate` | `object` | 保护上述三张表，`__gc` 回调与宿主线程共用 |
 | `_objectCacheRef` | `int` | 弱值表的注册表引用，保存 id → userdata |
 
 `LuaMarshal`：
@@ -160,8 +199,8 @@ id 的复用交给 `luaL_ref` 自带的空闲链，不再维护第二套。
 
 | 字段 | 类型 | 含义 |
 | :-- | :-- | :-- |
-| `_marshal` | `LuaMarshal` | 所属环境的编解码器，释放时使用 |
-| `_id` | `int` | 注册表引用 id |
+| `Marshal` | `LuaMarshal` | 所属环境的编解码器（`internal` 属性） |
+| `Id` | `int` | 注册表引用 id（`public` 只读属性） |
 | `_disposed` | `int` | `Interlocked` 释放标记 |
 | 终结器 | — | 只把 id 入队到 `_deferredReleases`，不在 GC 线程调 Lua |
 
@@ -174,7 +213,7 @@ id 的复用交给 `luaL_ref` 自带的空闲链，不再维护第二套。
 | `float`、`double` | number | `float` 以 double 传递，读回时检查范围 |
 | `bool` | boolean | |
 | `string` | string | UTF-8 编码 |
-| `byte[]` | string | 零拷贝读取需长度前缀，P0 走复制 |
+| `byte[]` | string | 零拷贝读取需长度前缀，当前版本走复制 |
 | 枚举 | integer | 底层类型转换 |
 | `decimal` | userdata（内联 16 字节） | 生成路径用 `PushStruct`/`ReadStruct` 无损传递；反射路径把无 metatable 的 16 字节 userdata 还原为 decimal |
 | 纯值类型 struct | userdata（内联字节） | 仅 blittable 字段，可嵌套；要求 `LayoutKind.Sequential` |
@@ -190,16 +229,16 @@ id 的复用交给 `luaL_ref` 自带的空闲链，不再维护第二套。
 2. `Read<T>` 先看栈上 `LuaType`，与目标类型做兼容检查（`number`→整型需检查小数部分与范围），再转换；失败抛 `LuaConversionException`。
 3. struct 读写不走托管对象：`RuntimeHelpers.IsReferenceOrContainsReferences<T>()` 判定失败直接抛 `NotSupportedException`；通过后按 `Unsafe.SizeOf<T>()` 分配 userdata，用 `Unsafe.Write/Read` 整块拷贝。
 4. 对象身份：id → userdata 存在弱值表里，C# 侧不持引用；userdata 被回收时 `__gc` 回调把 id 从身份表里移除，允许 id 复用。若对象仍被 C# 持有，下次 push 会重建 userdata。
-5. 句柄释放：`Dispose` 立即 `luaL_unref`（C API 允许在回调内调用，不需要延迟）；只有终结器无法在 GC 线程调 Lua，才把 id 入队，由 `Tick()` 在宿主线程释放。
+5. 句柄释放：在创建线程上 `Dispose` 立即 `luaL_unref`（C API 允许在回调内调用，不需要延迟）；在其它线程调用时改为把 id 入队，由 `Tick()` 在宿主线程释放；终结器无法在 GC 线程调 Lua，同样走入队路径。
 6. 自定义类型：`RegisterMarshaler(ITypeMarshaler)` 追加到列表尾部，查找时从后往前，后注册者优先；`Push<T>` 与 `Read<T>`/`Read(Type)` 都会先查自定义 marshaler。
 
 **复杂度**：标量 push/read O(1)；struct 按整块拷贝 O(1)（大小固定）；对象身份查找 O(1) 均摊；弱值表的大小随活跃对象数增长。
 
 **接口契约与错误传播**
 
-- 所有原语显式传 `IntPtr L` 与栈索引，不使用隐式「当前栈顶」状态，避免调用顺序耦合。
+- 所有原语显式传状态指针 `IntPtr state` 与栈索引，不使用隐式「当前栈顶」状态，避免调用顺序耦合。
 - 栈索引越界或类型不符统一抛 `LuaConversionException`，不做越界读取。
-- `LuaTable.Get` 缺失键返回 `default(T)`；类型不匹配抛 `LuaConversionException`，消息含键名与目标类型。
+- `LuaTable.Get` 缺失键返回 `default(T)`（显式写入 `nil` 的键同样得到 `default`）；类型不匹配抛 `LuaConversionException`，字符串键重载 `Get<T>(string)` 的消息附带键名，泛型键重载 `Get<TKey,TValue>` 只带期望类型与实际类型。
 - struct 内联读写使用 `unsafe`，工程开启 `AllowUnsafeBlocks`；`unsafe` 代码只允许出现在本模块。
 - 含引用字段的 struct 没有内联或装箱实现，直接抛 `NotSupportedException`。
 

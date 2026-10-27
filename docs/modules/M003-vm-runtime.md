@@ -27,7 +27,7 @@
 | E4 | 自定义 loader 返回 `byte[]` 时 `require` 成功；返回 `null` 时继续下一个 loader | 注册两个 loader，观察命中顺序 |
 | E5 | 所有 loader 都失败时抛 `LuaException`，消息含模块名与搜索过的 loader 数量 | 断言消息 |
 | E6 | 脚本报错时异常消息包含 `chunkName`、行号与 traceback | 执行 `error('boom')` 断言 |
-| E7 | 子线程调用 `LuaEnv` 公共成员或句柄的读写成员抛 `InvalidOperationException`；句柄的 `Dispose` 在子线程调用时排队到 `Tick()` | 跨线程测试 |
+| E7 | 子线程调用 `LuaEnv` 公共成员或句柄的读写成员抛 `InvalidOperationException`；`LuaReference` 句柄的 `Dispose` 在子线程调用时排队到 `Tick()` | 跨线程测试 |
 | E8 | 重复 `Dispose` 不抛异常 | 连调两次 |
 | E9 | 未显式释放的句柄由终结器入队，`Tick()` 后回收 | 放弃句柄引用，强制 GC 后 Tick，查引用计数 |
 | E10 | `CreateCoroutine()` 返回可推进的协程句柄；`Resume` 传入参数并返回 `yield`/`return` 的值 | 两次 `Resume` 的返回值与状态变化 |
@@ -50,7 +50,6 @@ public sealed partial class LuaEnv : IDisposable
 {
     public LuaEnv(LuaEnvOptions? options = null);
     public LuaTable Global { get; }
-    internal IntPtr Handle { get; }
     public long MemoryBytes { get; }
     public int GcPause { get; set; }
     public int GcStepMultiplier { get; set; }
@@ -86,7 +85,7 @@ public sealed class LuaCoroutine : IDisposable
 public enum LuaCoroutineStatus { Suspended, Dead }
 ```
 
-`LuaTable`/`LuaFunction` 的类型定义在 M002，`LuaEnv` 只返回句柄，不重复定义。`LuaFunction.CreateCoroutine()` 创建协程，句柄生命周期规则与 M002 的 `LuaReference` 一致。
+`LuaTable`/`LuaFunction` 的类型定义在 M002，`LuaEnv` 只返回句柄，不重复定义。`LuaFunction.CreateCoroutine()` 创建协程，句柄生命周期规则与 M002 的 `LuaReference` 一致。上方 API 只含对外契约；`internal IntPtr Handle` 与 `internal LuaMarshal Marshal` 供同程序集模块使用，不对外暴露。
 
 ```csharp
 using var function = (LuaFunction)env.DoString("""
@@ -127,7 +126,7 @@ update(0.016);
 | `ObjectDisposedException` | 环境已释放 | 调用方缺陷 |
 | `LuaLibraryNotFoundException` | 原生库缺失 | 初始化阶段终止 |
 
-**界面**：无界面。可观察产出是返回值、异常与日志回调。
+**界面**：无界面。对外暴露 `LuaEnv`、`LuaEnvOptions`、`GcMode`、`LogLevel`、`ScriptLoader`、`LuaCoroutine`、`LuaCoroutineStatus`，其余类型 `internal`；可观察产出是返回值、异常与日志回调。
 
 ## 具体实现细节
 
@@ -137,11 +136,13 @@ update(0.016);
 
 | 字段 | 类型 | 含义 |
 | :-- | :-- | :-- |
-| `_L` | `IntPtr` | Lua 状态 |
+| `_state` | `IntPtr` | Lua 状态 |
 | `_marshal` | `LuaMarshal` | 类型转换与引用表 |
+| `_options` | `LuaEnvOptions` | 构造时的选项副本 |
 | `_loaders` | `List<ScriptLoader>` | 按注册顺序尝试 |
-| `_ownerThread` | `int` | 创建线程 id |
-| `_disposed` | `bool` | 幂等释放标记 |
+| `_ownerThreadId` | `int` | 创建线程 id |
+| `_errorHandlerRef` | `int` | traceback 消息处理器的注册表引用 |
+| `_disposed` | `int` | `Interlocked` 幂等释放标记 |
 
 延迟释放队列在 `LuaMarshal` 内部（`ConcurrentQueue<int>`），`Tick()` 调用 `DrainDeferredReleases()` 消费，避免 GC 线程直接操作 Lua。
 
@@ -153,7 +154,7 @@ update(0.016);
 2. `luaL_openlibs()` 打开标准库。
 3. 构造 `LuaMarshal`，创建 userdata 元表与引用表。
 4. 注册 `require` 的 searcher：先走 `_loaders`，再走 `package.path` 文件查找；loader 返回 `null` 视为未命中，修改 `moduleName` 为真实路径以保留调试信息。
-5. 设置 `package.path` 为 `SearchPaths` 按 `;` 拼接。
+5. 设置 `package.path` 为 `SearchPaths` 按 `;` 拼接；`SearchPaths` 为空数组时保持 Lua 默认的 `package.path` 不变。
 6. 注册消息处理器（`lua_pcall` 的 `msgh`），把错误对象转成带 traceback 的字符串。
 7. 调用 `Interop.Install(this)` 建立 `CS` 表与类型解析器（实现在 M004，同程序集内的启动钩子）。
 
@@ -161,6 +162,7 @@ update(0.016);
 
 - `DoString`：`luaL_loadbufferx` → 失败直接抛 `LuaException`（语法错误，含 chunk 与行号）；成功则 `lua_pcallk`（`nargs=0`、`nresults` 不定），结果按 M002 转成 `object[]`。
 - `LoadString`：只编译不执行，返回 `LuaFunction` 句柄。
+- `LoadString<T>`：编译后执行一次并转换结果——`T` 为 `LuaFunction` 时直接返回句柄；否则取首个返回值，能直接赋给 `T` 时返回它，返回值是 `LuaFunction` 且需要 `T` 时按 `T` 读取（delegate 走这条），都不匹配时把函数句柄按 `T` 读取。脚本报错抛 `LuaException`。
 - 错误对象为非字符串时，用 `tostring` 转换；转换失败则输出类型名。
 
 **GC 与清理**
@@ -179,7 +181,7 @@ update(0.016);
 - `LuaCoroutine` 持有 `lua_newthread` 创建的 `lua_State*` 与注册表引用；创建时把函数从主线程 `lua_xmove` 到协程栈。
 - `Resume`：主线程压入协程与参数 → `lua_xmove` 到协程 → `lua_resume`（版本差异由 `LuaRuntimeProfile.Resume` 收敛）→ 结果移回主线程 → 按 M002 规则转成 `object[]`。
 - 协程 `return` 后状态为 `Dead`；再次 `Resume` 抛 `InvalidOperationException`。协程内错误从协程栈读取错误对象，抛 `LuaException`，状态变为 `Dead`。
-- `Dispose` 释放协程引用，重复释放无副作用；所有栈操作仍在主线程的 `LuaStackGuard` 内完成。
+- `Dispose` 释放协程引用，重复释放无副作用；协程句柄不做跨线程排队，必须与 `LuaEnv` 在同一线程释放。所有栈操作仍在主线程的 `LuaStackGuard` 内完成。
 
 **复杂度**：初始化 O(1)（不含库内部）；`DoString` O(脚本)；`Tick` O(待释放数量)；`Resume` O(本次推进的脚本量)。
 

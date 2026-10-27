@@ -35,7 +35,7 @@
 
 **非目标**
 
-- 增量编译级的细粒度缓存（P0 只做文件级比对）。
+- 增量编译级的细粒度缓存（当前只做文件级比对）。
 - 为泛型开放类型生成代码（只支持闭合泛型）。
 - 多语言输出（只产出 C#）。
 
@@ -82,15 +82,55 @@ lua-loom-gen generate --config lua-loom.json --coverage
 | `check` 发现差异 | `1` | 差异文件清单 |
 | 参数缺失 | `64` | 用法说明 |
 
+**库 API（`LuaLoom.CodeGen`）**
+
+```csharp
+public static class CodeGenerator
+{
+    public static GeneratorConfig LoadConfig(string configPath);                             // 配置缺失或校验失败抛 CodeGenException
+    public static GenerationResult Generate(GeneratorConfig config, string baseDirectory);   // 程序集缺失抛 FileNotFoundException
+}
+
+public sealed class GeneratorConfig      // 对应 lua-loom.json 的字段
+{
+    public string Assembly { get; set; }          // 默认空，必填
+    public string Output { get; set; }            // 默认空，必填
+    public string Namespace { get; set; }         // 默认 "LuaLoom.Generated"
+    public string[] LuaCallCSharp { get; set; }
+    public string[] CSharpCallLua { get; set; }
+    public string[] GenericMethods { get; set; }
+    public string[] ReflectionUse { get; set; }
+    public string[] GCOptimize { get; set; }
+    public string[] BlackList { get; set; }
+    public string[] DoNotGen { get; set; }
+}
+
+public sealed class GenerationResult
+{
+    public IReadOnlyList<GeneratedFile> Files { get; }
+    public IReadOnlyList<Diagnostic> Diagnostics { get; }
+    public IReadOnlyList<CoverageEntry> Coverage { get; }
+    public bool HasErrors { get; }
+}
+
+public sealed record GeneratedFile(string FileName, string Content, bool IsCode = true);
+public sealed record Diagnostic(string Code, string Message);
+public sealed record CoverageEntry(string TypeName, string Member, string Status, string Reason);
+```
+
+`Generate` 只构造产物、不写磁盘；写文件与 `check` 的逐字节比对由 CLI 完成。相对路径以 `baseDirectory`（通常传配置文件所在目录）为基准解析。
+
 **异常表**（作为库调用时）
 
 | 异常 | 触发条件 | 调用方处理 |
 | :-- | :-- | :-- |
-| `CodeGenException` | 配置非法、类型缺失、生成结果无法编译 | 终止构建 |
+| `CodeGenException` | 配置文件缺失、字段非法、JSON 反序列化失败 | 终止构建 |
 | `FileNotFoundException` | `assembly` 路径不存在 | 终止构建，提示先编译 |
-| `IOException` | 输出目录不可写 | 终止构建 |
+| `IOException` | 输出目录不可写（CLI 写文件阶段） | 终止构建 |
 
-**界面**：命令行即交互面；无 GUI。
+类型缺失、开放泛型、重复配置等属于诊断而非异常：`Generate` 照常返回，`HasErrors` 为 `true`，CLI 据此返回退出码 `2`；诊断码清单见「具体实现细节」的接口契约一节。
+
+**界面**：命令行即交互面；无 GUI。对外暴露 `LuaLoom.CodeGen` 的 `CodeGenerator`、`GeneratorConfig`、`GenerationResult`、`GeneratedFile`、`Diagnostic`、`CoverageEntry`、`CodeGenException`（清单见「使用与交互设计」的库 API 一节），以及 CLI `lua-loom-gen`。
 
 ## 具体实现细节
 
@@ -128,7 +168,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 1. 读取配置，校验字段完整性；相对路径以配置文件所在目录为基准解析。
 2. `MetadataLoadContext` 加载目标程序集及其依赖，解析每个类型全名；缺失则记 `LL0001`。`csharpCallLua` 支持 `Name<Arg1, Arg2>`：先查目标程序集、核心程序集与已加载程序集，再递归解析泛型参数并 `MakeGenericType`；基本类型别名映射到 CLR 类型。
 3. 遍历类型成员：跳过非公共成员、`obsolete` 成员，以及生成器不支持的类型（开放泛型、指针等）；被跳过的成员由 M004 的反射回落接管，不记错误。基类成员只有在直接基类也列入 `luaCallCSharp` 时才纳入。
-4. 对 delegate/interface 生成 invoker 或实现类；配置中的静态扩展类额外生成 `RegisterExtensionType` 与 `RegisterExtensions` 分派表；类型绑定包含非字符串键索引器、操作符与事件订阅 thunk。方法组按实参个数与 Lua 类型条件分派（字符串、布尔、整数、数值、userdata 等）；复杂重载组（`ref`/`out`/`params`/默认值混合）也用统一的动态 arity 分派，`out` 不消耗实参，`params` 吞掉剩余实参，缺省值按实参个数补齐；一维数组通过 `LuaBinding.ReadArray<T>` / `PushArray<T>` 编解码，矩形数组通过 `ReadObjectAs<T[,]>` / `PushArray(Array)` 递归成嵌套表。接口实现支持事件（转发 `add_<Event>`/`remove_<Event>`）和无约束泛型方法（方法名查表、`T` 走 `ConvertObject<T>`）；带约束的泛型接口方法与默认接口实现仍不生成。闭合泛型 delegate 的 `TypeRef` 递归输出 `global::Namespace.Type<...>`，文件名用 `TypeRef` 做字符白名单替换，避免写入尖括号、逗号与程序集限定名。
+4. 对 delegate/interface 生成 invoker 或实现类；配置中的静态扩展类额外生成 `RegisterExtensionType` 与 `RegisterExtensions` 分派表；类型绑定包含非字符串键索引器、操作符与事件订阅 thunk。方法组按实参个数与 Lua 类型条件分派（字符串、布尔、整数、数值、userdata 等）；复杂重载组（`ref`/`out`/`params`/默认值混合）也用统一的动态 arity 分派，`out` 不消耗实参，`params` 吞掉剩余实参，缺省值按实参个数补齐；一维数组通过 `LuaBinding.ReadArray<T>` / `PushArray<T>` 编解码，矩形数组通过 `ReadObjectAs<T>`（`T` 为二维数组类型）/ `PushArray(Array)` 递归成嵌套表。接口实现支持事件（转发 `add_<Event>`/`remove_<Event>`）和无约束泛型方法（方法名查表、`T` 走 `ConvertObject<T>`）；带约束的泛型接口方法与默认接口实现仍不生成。闭合泛型 delegate 的 `TypeRef` 递归输出 `global::Namespace.Type<...>`，文件名用 `TypeRef` 做字符白名单替换，避免写入尖括号、逗号与程序集限定名。
 5. 用 `CSharpSyntaxTree.ParseText` 做语法校验；真正的编译校验放在测试里，用 `CSharpCompilation` 对产物做一次 Emit。
 6. 通过后按文件名 `Ordinal` 排序写文件，UTF-8 无 BOM，换行 `\n`。
 7. 按配置类型、`reflectionUse` 与 `gcOptimize` 生成 `link.xml`，避免 Unity IL2CPP 裁剪反射/生成所需元数据；XML 文件跳过 C# 语法校验。`gcOptimize` 只接受值类型，GC 优化本身由 `StructCodec` 按 blittable 自动判定。`scripts/trim-check.ps1` 用 `PublishTrimmed` 发布示例并运行，作为裁剪烟测；IL2CPP 真机仍需在 Unity 侧验证。
@@ -144,7 +184,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 - 注册是显式的：消费方创建 `LuaEnv` 后调用 `LuaBindings.Register(env)`，把类型、delegate、interface 三类绑定注册进环境，不使用 `ModuleInitializer`，避免全局静态注册表。
 - 产物是普通 `.cs` 文件，放回项目目录即被 SDK 默认通配包含，不需要手写 `<Compile Include>`。
 - 生成器依赖 `Microsoft.CodeAnalysis.CSharp`，只作为 CLI 的构建期依赖，不随运行时库发布。
-- 诊断码固定：`LL0001` 类型不存在、`LL0002` 成员类型不支持、`LL0003` 开放或不受支持的泛型、`LL0004` 配置重复、`LL0005` 泛型方法配置无法解析、`LL0006` 产物语法错误。
+- 诊断码固定：`LL0001` 类型不存在、`LL0002` 类型或成员不受支持（嵌套类型、`csharpCallLua` 里既非 delegate 也非 interface、`gcOptimize` 非值类型、泛型方法的参数或返回类型不可生成）、`LL0003` 开放或不受支持的泛型、`LL0004` 配置重复、`LL0005` 泛型方法配置无法解析、`LL0006` 产物语法错误。
 - 生成失败时不写任何文件，避免留下半成品。
 
 **当前支持范围**
@@ -223,7 +263,7 @@ JSON 键统一 camelCase，反序列化到上表的 PascalCase 属性。struct �
 | 派生类单独配置 | `generate` | 不生成未配置基类成员 |
 | 类型含 `this[int]` | `generate` | 绑定含 `InstanceIndexer`/`InstanceIndexerSet` |
 | 同一类型在 `luaCallCSharp` 出现两次 | `generate` | 诊断 `LL0004`，退出码 `2` |
-| 输出目录只读 | `generate` | 抛 `IOException`，已有文件不被破坏 |
+| 输出目录只读 | `generate`（CLI） | 退出码 `2`，已有文件不被破坏 |
 | 生成物被手改或输出目录含过期文件 | `check` | 退出码 `1`，逐条列出差异文件名 |
 
 异常覆盖四类：空与边界（空的 `luaCallCSharp`、零成员类型）、非法输入（错误全名、开放泛型、重复配置）、依赖失败（程序集缺失、依赖解析失败、目录不可写）、重复与并发（重复执行）。两个进程同时写同一输出目录没有加锁，不在覆盖范围内。
